@@ -9,7 +9,7 @@ Configuration is done by editing `config.h`.
 ```bash
 git clone https://github.com/kolunmi/dnote
 cd dnote
-./build.sh install
+make install
 ```
 
 ## Examples
