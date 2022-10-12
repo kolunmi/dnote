@@ -1,10 +1,14 @@
-static const unsigned int def_expire = 3;      /* seconds until window disapears */
+#define MAX_NOTIFICATIONS 10
+
+static const unsigned int def_expire = 10;     /* seconds until window disapears */
 static const unsigned int def_min_width = 100; /* minimum window width */
 static const int def_center_text = 1;          /* center text in window */
 static const unsigned int border_width = 2;    /* size of the window border */
 static unsigned int bar_outer_pad = 7;         /* cosmetic padding between window edge and progress bar background */
 static unsigned int bar_inner_pad = 4;         /* cosmetic padding between progress bar background and foreground */
-static const int detectmon = 0;                /* display to current monitor upon startup */
+static const int border_padding = 50;          /* cosmetic padding between notifications and screen border */
+static const int inter_padding = 20;           /* cosmetic padding between notifications */
+static const int detectmon = 0;                /* display to focused monitor upon startup */
 
 /* def_location values correspond to these positions on your screen
 	|---+---+---|

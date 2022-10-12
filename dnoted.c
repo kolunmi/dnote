@@ -1,16 +1,17 @@
 #include <ctype.h>
-#include <locale.h>
 #include <fcntl.h>
+#include <locale.h>
+#include <pthread.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
-#include <pthread.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-
+#include <X11/X.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #ifdef XINERAMA
@@ -22,118 +23,356 @@
 #include "drw.h"
 #include "util.h"
 
-/* macros */
+
 #define INTERSECT(x,y,w,h,r)  (MAX(0, MIN((x)+(w),(r).x_org+(r).width)  - MAX((x),(r).x_org)) \
 			       && MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
 #define LENGTH(X)             (sizeof X / sizeof X[0])
 #define TEXTW(X)              (drw_fontset_getwidth(drw, (X)) + lrpad)
 
-/* enums */
+
 enum { SchemeNorm, SchemeSel, SchemeBar, SchemeLast }; /* color schemes */
 
 
-void *countdown(void *arg);
-void drawcontents(void);
-void readmessage(char *msg, int msg_len);
+#include "config.h"
+
+
+typedef struct {
+
+    char id[MAX_ID_LEN];
+    int center_text;
+    unsigned int expire;
+    unsigned int min_width;
+    unsigned int location;
+    unsigned int progress_val, progress_of;
+    
+} Profile;
+
+typedef struct {
+    
+    int active, visible;
+    Window win;
+    int mw, mh, wx, wy;
+    pthread_t timer;
+    int inited;
+    Profile prof;
+    
+} Notification;
+
+
+void *count_down(void *arg);
+void *monitor_socket(void *arg);
+void *monitor_x(void *arg);
+void arrange(void);
+void cancel_inactive(void);
+void cleanup(void);
+void create_window(Window *win);
+void draw_contents(Notification *n);
+void make_geometry(Notification *n);
+void read_message(void);
+void recieve_message(void);
+void run(void);
 void setdefaults(void);
-void setup(void);
-void updategeometry(void);
+void setup_x(void);
 void usage(void);
-void *xrun(void *vargp);
 
-char socketpath[BUFSIZ];
 
-static char **lines = NULL;
-static unsigned int max_lines, linecnt;
+static char socketpath[BUFSIZ];
+static int sock_fd, cli_fd;
 
-static int bh, mw, mh, wx, wy;
-static int lmw, lmh, lwx, lwy;
-static unsigned int monw;
-static unsigned int monh;
-static int lrpad; /* sum of left and right padding */
+static Display *dpy;
+static Window root, parentwin;
+static Drw *drw;
+static Clr *scheme[SchemeLast];
+static int bh;
+static unsigned int monw, monh;
+static int lrpad;
 static int mon = -1, screen;
 #ifdef XINERAMA
 static int xin_x;
 static int xin_y;
 #endif
 
-static Display *dpy;
-static Window root, parentwin, win;
-static Drw *drw;
-static Clr *scheme[SchemeLast];
+static sem_t mut_resume, mut_check_socket, mut_check_x;
+static int message_recieved, event_recieved;
 
-static unsigned int expire;
-static unsigned int min_width;
-static int center_text;
-static unsigned int location;
+static char msg[MESSAGE_SIZE];
+static unsigned int msg_len;
 
-static unsigned int progressval;
-static unsigned int progressof;
+static Notification notifs[MAX_NOTIFICATIONS];
+static Notification *order[MAX_NOTIFICATIONS];
+
+static Profile read_prof;
+
+static char **lines = NULL;
+static unsigned int linecnt;
+static unsigned int max_lines;
 
 
-#include "config.h"
+void *
+count_down(void *arg)
+{
+    Notification *n = arg;
+    
+    sleep(n->prof.expire);
+    n->visible = 0;
+    sem_post(&mut_resume);
+    return 0;
+}
+
+
+void *
+monitor_socket (void *arg)
+{
+    for (;;) {
+	sem_wait(&mut_check_socket);
+	cli_fd = accept(sock_fd, NULL, 0);
+	message_recieved = 1;
+	sem_post(&mut_resume);
+    }
+    
+    return 0;
+}
+
+
+void *
+monitor_x(void *arg)
+{
+    int post;
+    unsigned int i;
+    XEvent ev;
+
+    for (;;) {
+	post = 0;
+	
+	sem_wait(&mut_check_x);
+	
+	while (XNextEvent(dpy, &ev) == 0) {
+	    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+		if (!notifs[i].active)
+		    continue;
+	    
+		if (ev.type == VisibilityNotify) {
+		    if (ev.xvisibility.window != notifs[i].win)
+			continue;
+		    if (ev.xvisibility.state != VisibilityUnobscured)
+			XRaiseWindow(dpy, notifs[i].win);
+		}
+		else if (ev.type == DestroyNotify) {
+		    if (ev.xdestroywindow.window != notifs[i].win)
+			continue;
+		    post = 1;
+		    break;
+		}
+		else if (ev.type == ButtonPress) {
+		    if (ev.xbutton.window != notifs[i].win)
+			continue;
+		    if (ev.xbutton.button != Button1)
+			break;
+		    post = 1;
+		    break;
+		}
+		
+	    }
+	    if (post) {
+		notifs[i].visible = 0;
+		event_recieved = 1;
+		sem_post(&mut_resume);
+		break;
+	    }
+	}
+    }
+
+    return 0;
+}
 
 
 void
-cleanup(void) {
-    unlink(socketpath);
+arrange(void)
+{
+    unsigned int i;
+    Notification *n;
+
+    int offsets[9];
+    offsets[0] = 0;
+    for (i = 1; i < 9; i++)
+	offsets[i] = border_padding;
+
+    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+	n = order[i];
+	
+	if (!n->active || !n->visible)
+	    continue;
+
+	switch (n->prof.location) {
+	case 0:
+	    n->wx = (monw - n->mw) / 2;
+	    n->wy = (monh - n->mh) / 2 + offsets[0];
+	    offsets[0] += n->mh + inter_padding;
+	    break;
+	case 1:
+	    n->wx = (monw - n->mw) / 2;
+	    n->wy = (monh - n->mh) - offsets[1];
+	    offsets[1] += n->mh + inter_padding;
+	    break;
+	case 2:
+	    n->wx = (monw - n->mw) - border_padding;
+	    n->wy = (monh - n->mh) - offsets[2];
+	    offsets[2] += n->mh + inter_padding;
+	    break;
+	case 3:
+	    n->wx = (monw - n->mw) - offsets[3];
+	    n->wy = (monh - n->mh) / 2;
+	    offsets[3] += n->mw + inter_padding;
+	    break;
+	case 4:
+	    n->wx = (monw - n->mw) - border_padding;
+	    n->wy = offsets[4];
+	    offsets[4] += n->mh + inter_padding;
+	    break;
+	case 5:
+	    n->wx = (monw - n->mw) / 2;
+	    n->wy = offsets[5];
+	    offsets[5] += n->mh + inter_padding;
+	    break;
+	case 6:
+	    n->wx = border_padding;
+	    n->wy = offsets[6];
+	    offsets[6] += n->mh + inter_padding;
+	    break;
+	case 7:
+	    n->wx = offsets[7];
+	    n->wy = (monh - n->mh) / 2;
+	    offsets[7] += n->mw + inter_padding;
+	    break;
+	case 8:
+	    n->wx = border_padding;
+	    n->wy = (monh - n->mh) - offsets[8];
+	    offsets[8] += n->mh + inter_padding;
+	    break;
+	default:
+	    die("Invalid location");
+	}
+
+#ifdef XINERAMA
+	n->wx += xin_x;
+	n->wy += xin_y;
+#endif
+
+	XMapRaised(dpy, n->win);
+	XMoveWindow(dpy, n->win, n->wx, n->wy);
+    }
+    
+    XSync(dpy, False);
+}
+
+
+void
+cancel_inactive(void)
+{
+    unsigned int i;
+    
+    for (i = 0; i < MAX_NOTIFICATIONS; i++)
+	if (notifs[i].active && !notifs[i].visible) {
+	    if (notifs[i].prof.expire)
+		pthread_cancel(notifs[i].timer);
+	    XUnmapWindow(dpy, notifs[i].win);
+	    notifs[i].active = 0;
+	}
+}
+
+
+void
+cleanup(void)
+{
     size_t i;
     for (i = 0; i < SchemeLast; i++)
 	free(scheme[i]);
     drw_free(drw);
     XSync(dpy, False);
     XCloseDisplay(dpy);
+    unlink(socketpath);
 }
 
 
 void
-drawcontents(void)
+create_window (Window *win)
+{
+    XSetWindowAttributes swa;
+    XClassHint ch = { "dnoted", "dnoted" };
+    
+    swa.override_redirect = True;
+    swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
+    swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask;
+    *win = XCreateWindow(dpy, parentwin, 0, 0, 1, 1, border_width,
+			CopyFromParent, CopyFromParent, CopyFromParent,
+			CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
+    XSetWindowBorder(dpy, *win, scheme[SchemeSel][ColBg].pixel);
+    XSetClassHint(dpy, *win, &ch);
+    XSelectInput(dpy, *win, ButtonPressMask | FocusChangeMask | SubstructureNotifyMask);
+}
+
+
+void
+draw_contents(Notification *n)
 {
     unsigned int i;
     int y = 0;
 
+    XMapWindow(dpy, n->win);
+    
     drw_setscheme(drw, scheme[SchemeNorm]);
-    drw_rect(drw, 0, 0, mw, mh, 1, 1);
+    drw_rect(drw, 0, 0, n->mw, n->mh, 1, 1);
 
-    /* draw vertical list */
     for (i = 0; i < linecnt; i++) {
-	drw_text(drw, center_text ? (mw - TEXTW(lines[i]))/2 : 0, y, mw, bh, lrpad / 2, lines[i], 0);
+	drw_text(drw, n->prof.center_text ? (n->mw - TEXTW(lines[i]))/2 : 0, y, n->mw, bh, lrpad / 2, lines[i], 0);
 	y += bh;
     }
 
-    if (progressof) {
+    if (n->prof.progress_of) {
 	drw_setscheme(drw, scheme[SchemeBar]);
 		
 	if (bar_outer_pad + bar_inner_pad >= bh / 2
-	    || bar_outer_pad + bar_inner_pad >= mw / 2)
+	    || bar_outer_pad + bar_inner_pad >= n->mw / 2)
 	    bar_outer_pad = bar_inner_pad = 0;
 
-	drw_rect(drw, bar_outer_pad, y + bar_outer_pad, mw - 2 * bar_outer_pad, bh - 2 * bar_outer_pad, 1, 1);
-	drw_rect(drw, bar_outer_pad + bar_inner_pad, y + bar_outer_pad + bar_inner_pad, progressval * (mw - 2 * (bar_outer_pad + bar_inner_pad)) / progressof, bh - 2 * (bar_outer_pad + bar_inner_pad), 1, 0);
+	drw_rect(drw, bar_outer_pad, y + bar_outer_pad, n->mw - 2 * bar_outer_pad, bh - 2 * bar_outer_pad, 1, 1);
+	drw_rect(drw, bar_outer_pad + bar_inner_pad, y + bar_outer_pad + bar_inner_pad, n->prof.progress_val * (n->mw - 2 * (bar_outer_pad + bar_inner_pad)) / n->prof.progress_of, bh - 2 * (bar_outer_pad + bar_inner_pad), 1, 0);
 	drw_setscheme(drw, scheme[SchemeNorm]);
     }
 
-    drw_map(drw, win, 0, 0, mw, mh);
+    drw_map(drw, n->win, 0, 0, n->mw, n->mh);
 }
 
 
 void
-*countdown(void *arg)
+make_geometry(Notification *n)
 {
-    sleep(*(int *)arg);
-    XUnmapWindow(dpy, win);
-    XSync(dpy, False);
-    return 0;
-}
-
-
-void
-readmessage(char *msg, int msg_len)
-{
-    size_t i, j, size = BUFSIZ;
-    int optblk = 1;
-    char optbuf[1024], *p;
+    unsigned int i, inputw, tmpmax;
     
+    inputw = tmpmax = 0;
+    
+    for (i = 0; i < linecnt; i++) {
+	tmpmax = TEXTW(lines[i]);
+	if (tmpmax > inputw)
+	    inputw = tmpmax;
+    }
+
+    n->mh = (linecnt + ((n->prof.progress_of) ? 1 : 0)) * bh;
+    n->mw = MIN(MAX(inputw, n->prof.min_width), 8 * monw / 10);
+
+    XResizeWindow(dpy, n->win, n->mw, n->mh);
+    drw_resize(drw, n->mw, n->mh);
+}
+
+
+void
+read_message(void)
+{
+    size_t i, j;
+    int optblk;
+    char optbuf[BUFSIZ], *p;
+
+    optblk = 1;
     linecnt = 0;
 
     for (i = 0, j = 0; i < msg_len; i++) {
@@ -148,7 +387,8 @@ readmessage(char *msg, int msg_len)
 	    j = i + 1;
 
 	    linecnt++;
-	    if (progressof && linecnt >= max_lines - 1)
+	    
+	    if (read_prof.progress_of && linecnt >= max_lines - 1)
 		break;
 	    if (linecnt >= max_lines)
 		break;
@@ -158,32 +398,35 @@ readmessage(char *msg, int msg_len)
 	} else if (optblk) {
 	    switch (msg[i]) {
 	    case 'c':
-		center_text = 1;
+		read_prof.center_text = 1;
 		break;
 	    case 'n':
-		center_text = 0;
+		read_prof.center_text = 0;
 		break;
 	    case 'p':
 		strfindtrans(optbuf, msg, '/', &i);
-		progressval = atoi(optbuf);
+		read_prof.progress_val = atoi(optbuf);
 		strfindtrans(optbuf, msg, ':', &i);
-		progressof = atoi(optbuf);
+		read_prof.progress_of = atoi(optbuf);
 		break;
 	    case 'z':
-		expire = 0;
+		read_prof.expire = 0;
 		break;
 	    case 'e':
 		strfindtrans(optbuf, msg, ':', &i);
-		expire = atoi(optbuf);
+		read_prof.expire = atoi(optbuf);
 		break;
 	    case 'w':
 		strfindtrans(optbuf, msg, ':', &i);
-		min_width = atoi(optbuf);
+		read_prof.min_width = atoi(optbuf);
 		break;
 	    case 'l':
 		optbuf[0] = msg[++i];
 		optbuf[1] = '\0';
-		location = atoi(optbuf);
+		read_prof.location = atoi(optbuf);
+		break;
+	    case 'i':
+		strfindtrans(read_prof.id, msg, ':', &i);
 		break;
 	    }
 			
@@ -198,14 +441,133 @@ readmessage(char *msg, int msg_len)
 
 
 void
-setup(void)
+recieve_message(void)
+{
+    unsigned int i;
+    Notification *n, *t1, *t2;
+	    
+    if (cli_fd == -1) {
+	cleanup();
+	die("socket error");
+    }
+
+    msg_len = recv(cli_fd, msg, sizeof msg, 0);
+    close(cli_fd);
+
+    for (;;) {
+	if (msg_len > 0) {
+	    setdefaults();
+	    read_message();
+	    if (!linecnt)
+		break;
+	} else
+	    break;
+
+	n = NULL;
+	if (read_prof.id[0] != '\0')
+	    for (i = 0; i < MAX_NOTIFICATIONS; i++)
+		if (notifs[i].active) {
+		    if (notifs[i].prof.id[0] != '\0'
+			&& !strcmp(notifs[i].prof.id, read_prof.id)) {
+			n = &notifs[i];
+			pthread_cancel(n->timer);
+			n->active = 1;
+			break;
+		    }
+		}
+	if (n == NULL)
+	    for (i = 0; i < MAX_NOTIFICATIONS; i++)
+		if (!notifs[i].active) {
+		    n = &notifs[i];
+		    break;
+		}
+	if (n == NULL) {
+	    fputs("request rejected: too many notifications\n", stderr);
+	    break;
+	}
+
+	if (n != order[0]) {
+	    t1 = order[0];
+	    order[0] = n;
+		
+	    for (i = 1; i < MAX_NOTIFICATIONS; i++) {
+		if (order[i] == n) {
+		    order[i] = t1;
+		    break;
+		}
+		t2 = order[i];
+		order[i] = t1;
+		t1 = t2;
+	    }
+	}
+		
+	n->prof = read_prof;
+	make_geometry(n);
+	draw_contents(n);
+
+	n->active = 1;
+	n->visible = 1;
+		
+	if (n->prof.expire)
+	    pthread_create(&n->timer, NULL, count_down, n);
+
+	break;
+    }
+}
+
+
+void
+run(void)
+{
+    pthread_t socket_handler, x_handler;
+
+    pthread_create(&socket_handler, NULL, monitor_socket, NULL);
+    sem_post(&mut_check_socket);
+    
+    pthread_create(&x_handler, NULL, monitor_x, NULL);
+    sem_post(&mut_check_x);
+    
+    for (;;) {
+	sem_wait(&mut_resume);
+	
+	if (message_recieved)
+	    recieve_message();
+
+	cancel_inactive();
+	arrange();
+	
+	if (message_recieved) {
+	    message_recieved = 0;
+	    sem_post(&mut_check_socket);
+	}
+	
+	if (event_recieved) {
+	    event_recieved = 0;
+	    sem_post(&mut_check_x);
+	}
+    }
+}
+
+
+void
+setdefaults(void)
+{
+    read_prof.id[0] = '\0';
+    read_prof.expire = def_expire;
+    read_prof.min_width = def_min_width;
+    read_prof.center_text = def_center_text;
+    read_prof.location = def_location;
+    read_prof.progress_of = 0;
+}
+
+
+void
+setup_x(void)
 {
     int x, y, i, j;
     unsigned int du;
-    XSetWindowAttributes swa;
     Window w, dw, *dws;
     XWindowAttributes wa;
-    XClassHint ch = { "dnoted", "dnoted" };
 #ifdef XINERAMA
     XineramaScreenInfo *info;
     Window pw;
@@ -215,8 +577,6 @@ setup(void)
     /* init appearance */
     for (j = 0; j < SchemeLast; j++)
 	scheme[j] = drw_scm_create(drw, colors[j], 2);
-
-    bh = drw->fonts->h + 2;
 
     /* menu geometry */
 #ifdef XINERAMA
@@ -265,103 +625,13 @@ setup(void)
 	monh = wa.height;
     }
 
+    bh = drw->fonts->h + 2;
     max_lines = 8 * monh / 10 / bh;
-
-    /* create menu window */
-    swa.override_redirect = True;
-    swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
-    swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask;
-    win = XCreateWindow(dpy, parentwin, 0, 0, 1, 1, border_width,
-			CopyFromParent, CopyFromParent, CopyFromParent,
-			CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
-    XSetWindowBorder(dpy, win, scheme[SchemeSel][ColBg].pixel);
-    XSetClassHint(dpy, win, &ch);
-    XSelectInput(dpy, win, ButtonPressMask | FocusChangeMask | SubstructureNotifyMask);
-    XMapRaised(dpy, win);
-}
-
-
-void
-setdefaults(void)
-{
-    expire = def_expire;
-    min_width = def_min_width;
-    center_text = def_center_text;
-    location = def_location;
-    progressof = 0;
-}
-
-
-void
-updategeometry(void)
-{
-    unsigned int i, inputw, tmpmax;
-
-    inputw = tmpmax = 0;
     
-    for (i = 0; i < linecnt; i++) {
-	tmpmax = TEXTW(lines[i]);
-	if (tmpmax > inputw)
-	    inputw = tmpmax;
+    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+	notifs[i].active = notifs[i].visible = 0;
+	create_window(&notifs[i].win);
     }
-
-    lmh = mh;
-    lmw = mw;
-    lwx = wx;
-    lwy = wy;
-
-    mh = (linecnt + ((progressof) ? 1 : 0)) * bh;
-    mw = MIN(MAX(inputw, min_width), 8 * monw / 10);
-
-    switch (location) {
-    case 1:
-	wx = 1 * (monw - mw) / 2;
-	wy = 9 * (monh - mh) / 10;
-	break;
-    case 2:
-	wx = 9 * (monw - mw) / 10;
-	wy = 9 * (monh - mh) / 10;
-	break;
-    case 3:
-	wx = 9 * (monw - mw) / 10;
-	wy = 1 * (monh - mh) / 2;
-	break;
-    case 4:
-	wx = 9 * (monw - mw) / 10;
-	wy = 1 * (monh - mh) / 10;
-	break;
-    case 5:
-	wx = 1 * (monw - mw) / 2;
-	wy = 1 * (monh - mh) / 10;
-	break;
-    case 6:
-	wx = 1 * (monw - mw) / 10;
-	wy = 1 * (monh - mh) / 10;
-	break;
-    case 7:
-	wx = 1 * (monw - mw) / 10;
-	wy = 1 * (monh - mh) / 2;
-	break;
-    case 8:
-	wx = 1 * (monw - mw) / 10;
-	wy = 9 * (monh - mh) / 10;
-	break;
-    default:
-	wx = 1 * (monw - mw) / 2;
-	wy = 1 * (monh - mh) / 2;
-	break;
-    }
-
-#ifdef XINERAMA
-    wx += xin_x;
-    wy += xin_y;
-#endif
-
-    if (mw != lmw || mh != lmh) {
-	drw_resize(drw, mw, mh);
-	XMoveResizeWindow(dpy, win, wx, wy, mw, mh);
-    } else if (wx != lwx || wy != lwy)
-	XMoveResizeWindow(dpy, win, wx, wy, mw, mh);
 }
 
 
@@ -369,41 +639,8 @@ void
 usage(void)
 {
     fputs("usage: dnoted [OPTS]\n"
-	  "	-v		print version info\n", 
+	  "	-v	print version info\n", 
 	  stderr);
-}
-
-
-void
-*xrun(void *vargp)
-{
-    XEvent ev;
-
-    while (!XNextEvent(dpy, &ev)) {
-	if (XFilterEvent(&ev, win))
-	    continue;
-	switch (ev.type) {
-	case DestroyNotify:
-	    if (ev.xdestroywindow.window != win)
-		break;
-	    cleanup();
-	    exit(1);
-	case Expose:
-	    if (ev.xexpose.count == 0)
-		drw_map(drw, win, 0, 0, mw, mh);
-	    break;
-	case ButtonPress:
-	    if (ev.xbutton.button == Button1)
-		XUnmapWindow(dpy, win);
-	    break;
-	case VisibilityNotify:
-	    if (ev.xvisibility.state != VisibilityUnobscured)
-		XRaiseWindow(dpy, win);
-	    break;
-	}
-    }
-
-    return 0;
 }
 
 
@@ -411,24 +648,18 @@ int
 main(int argc, char *argv[])
 {
     unsigned int i, arg;
-    char msg[MESSAGE_SIZE];
-    
     XWindowAttributes wa;
-    int sock_fd = -1;
     struct sockaddr_un sock_address;
-    int cli_fd, msg_len;
 
-    pthread_t xhandler, timer;
-    int timer_inited = 0;
-
-    for (i = 1; i < argc; i++)
-	if (!strcmp(argv[i], "-v")) {
+    if (argc >= 2) {
+	if (!strcmp(argv[1], "-v")) {
 	    puts("dnoted-"VERSION);
 	    exit(0);
 	} else {
 	    usage();
 	    exit(1);
 	}
+    }
 
     if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
 	fputs("warning: no locale support\n", stderr);
@@ -465,41 +696,21 @@ main(int argc, char *argv[])
 	die("could not listen to the socket");
     fcntl(sock_fd, F_SETFD, FD_CLOEXEC | fcntl(sock_fd, F_GETFD));
 
-    setup();
-    lines = malloc(MESSAGE_SIZE);
-    pthread_create(&xhandler, NULL, xrun, NULL);
+    setup_x();
+    lines = malloc(max_lines * sizeof(char *));
 
-    for (;;) {
-	setdefaults();
-
-	cli_fd = accept(sock_fd, NULL, 0);
-	if (cli_fd == -1) {
-	    cleanup();
-	    die("socket error");
-	}
-
-	msg_len = recv(cli_fd, msg, sizeof msg, 0);
-	close(cli_fd);
-
-	if (msg_len > 0) {
-	    readmessage(msg, msg_len);
-	    if (!linecnt)
-		continue;
-	} else
-	    continue;
-
-	XMapRaised(dpy, win);
-	updategeometry();
-	drawcontents();
-
-	if (timer_inited)
-	    pthread_cancel(timer);
-	if (expire) {
-	    arg = expire;
-	    pthread_create(&timer, NULL, countdown, &arg);
-	    timer_inited = 1;
-	} 
-    }
+    for (i = 0; i < MAX_NOTIFICATIONS; i++)
+	order[i] = &notifs[i];
+    
+    sem_init(&mut_resume, 0, 1);
+    sem_init(&mut_check_socket, 0, 1);
+    sem_init(&mut_check_x, 0, 1);
+    
+    sem_wait(&mut_resume);
+    sem_wait(&mut_check_socket);
+    sem_wait(&mut_check_x);
+    
+    run();
 
     return 0;
 }

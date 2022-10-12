@@ -8,7 +8,8 @@
 #include "util.h"
 
 void
-die(const char *fmt, ...) {
+die(const char *fmt, ...)
+{
     va_list ap;
 
     va_start(ap, fmt);
@@ -36,7 +37,8 @@ ecalloc(size_t nmemb, size_t size)
 }
 
 void
-strfindtrans (char *dest, char *src, char find, size_t *from) {
+strfindtrans (char *dest, char *src, char find, size_t *from)
+{
     unsigned int cnt;
 
     cnt = 0;

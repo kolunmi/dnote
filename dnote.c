@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+
 #include <X11/Xlib.h>
 
 #include "common.h"
@@ -10,6 +12,7 @@
 void
 usage(void) {
     fputs("usage: dnote [OPTS]\n"
+	  "	-id [string]		asscociate message with id\n"
 	  "	-exp [seconds]		time until expiration\n"
 	  "	-minw [pixels]		minimum window width\n"
 	  "	-c			center text\n"
@@ -24,7 +27,7 @@ usage(void) {
 
 int
 main(int argc, char *argv[]) {
-    int i;
+    int i, j;
     char *emit;
     char buf[BUFSIZ];
     size_t len = 0;
@@ -46,12 +49,16 @@ main(int argc, char *argv[]) {
 	if (!strcmp(argv[i], "-v")) {
 	    puts("dnote-"VERSION);
 	    exit(0);
-	} else if (!strcmp(argv[i], "-c"))
+	}
+	else if (!strcmp(argv[i], "-c")) {
 	    strcpy(buf, "c");
-	else if (!strcmp(argv[i], "-nc"))
+	}
+	else if (!strcmp(argv[i], "-nc")) {
 	    strcpy(buf, "n");
-	else if (i + 1 == argc)
+	}
+	else if (i + 1 == argc) {
 	    usage();
+	}
 	/* these options take 1 argument */
 	else if (!strcmp(argv[i], "-minw")) {
 	    tmp1 = atoi(argv[++i]);
@@ -67,8 +74,21 @@ main(int argc, char *argv[]) {
 	    if (tmp1 > 8)
 		die("-loc : invalid location specifier");
 	    snprintf(buf, sizeof buf, "l%i", tmp1);
-	} else if (i + 2 >= argc)
+	} else if (!strcmp(argv[i], "-id")) {
+	    i++;
+	    tmp1 = strlen(argv[i]);
+	    if (tmp1 > MAX_ID_LEN) {
+		argv[i][MAX_ID_LEN - 1] = '\0';
+		tmp1 = MAX_ID_LEN;
+	    }
+	    for (j = 0; j < tmp1; j++)
+		if (argv[i][j] == ':')
+		    die("id cannot contain the character ':'");
+	    snprintf(buf, sizeof buf, "i%s:", argv[i]);
+	}
+	else if (i + 2 >= argc) {
 	    usage();
+	}
 	/* these options take 2 arguments */
 	else if (!strcmp(argv[i], "-pbar")) {
 	    tmp1 = atoi(argv[++i]);
