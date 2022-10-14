@@ -23,7 +23,7 @@ echo message | dnote -minw 200
 # control the location and time until expiration
 echo top right | dnote -loc 4 -exp 15
 
-# consruct a progress bar with fraction values
+# construct a progress bar with fraction values
 echo '75%' | dnote -pbar 3 4
 
 # associate the notification with an id, so any existing matches will be overwritten

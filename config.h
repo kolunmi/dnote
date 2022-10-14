@@ -8,7 +8,7 @@ static unsigned int bar_outer_pad = 7;         /* cosmetic padding between windo
 static unsigned int bar_inner_pad = 4;         /* cosmetic padding between progress bar background and foreground */
 static const int border_padding = 50;          /* cosmetic padding between notifications and screen border */
 static const int inter_padding = 20;           /* cosmetic padding between notifications */
-static const int detectmon = 0;                /* display to focused monitor upon startup */
+static const int detectmon = 0;                /* choose currently focused monitor rather than main */
 
 /* def_location values correspond to these positions on your screen
 	|---+---+---|

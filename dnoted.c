@@ -65,14 +65,14 @@ void *monitor_x(void *arg);
 void arrange(void);
 void cancel_inactive(void);
 void cleanup(void);
+void configure_x_geom(void);
 void create_window(Window *win);
 void draw_contents(Notification *n);
 void make_geometry(Notification *n);
 void read_message(void);
 void recieve_message(void);
 void run(void);
-void setdefaults(void);
-void setup_x(void);
+void set_defaults(void);
 void usage(void);
 
 
@@ -93,7 +93,7 @@ static int xin_y;
 #endif
 
 static sem_t mut_resume, mut_check_socket, mut_check_x;
-static int message_recieved, event_recieved;
+static int message_recieved, event_recieved, reconfigure;
 
 static char msg[MESSAGE_SIZE];
 static unsigned int msg_len;
@@ -147,32 +147,38 @@ monitor_x(void *arg)
 	sem_wait(&mut_check_x);
 	
 	while (XNextEvent(dpy, &ev) == 0) {
-	    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
-		if (!notifs[i].active)
-		    continue;
-	    
-		if (ev.type == VisibilityNotify) {
-		    if (ev.xvisibility.window != notifs[i].win)
-			continue;
-		    if (ev.xvisibility.state != VisibilityUnobscured)
-			XRaiseWindow(dpy, notifs[i].win);
-		}
-		else if (ev.type == DestroyNotify) {
-		    if (ev.xdestroywindow.window != notifs[i].win)
-			continue;
-		    post = 1;
-		    break;
-		}
-		else if (ev.type == ButtonPress) {
-		    if (ev.xbutton.window != notifs[i].win)
-			continue;
-		    if (ev.xbutton.button != Button1)
-			break;
-		    post = 1;
-		    break;
-		}
-		
+	    if (ev.type == ConfigureNotify) {
+		if (ev.xconfigure.window == root)
+		    post = reconfigure = 1;
 	    }
+	    else
+		for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+		    if (!notifs[i].active)
+			continue;
+
+		    if (ev.type == VisibilityNotify) {
+			if (ev.xvisibility.window != notifs[i].win)
+			    continue;
+			if (ev.xvisibility.state != VisibilityUnobscured)
+			    XRaiseWindow(dpy, notifs[i].win);
+		    }
+		    else if (ev.type == DestroyNotify) {
+			if (ev.xdestroywindow.window != notifs[i].win)
+			    continue;
+			post = 1;
+			break;
+		    }
+		    else if (ev.type == ButtonPress) {
+			if (ev.xbutton.window != notifs[i].win)
+			    continue;
+			if (ev.xbutton.button != Button1)
+			    break;
+			post = 1;
+			break;
+		    }
+		
+		}
+	    
 	    if (post) {
 		notifs[i].visible = 0;
 		event_recieved = 1;
@@ -291,6 +297,71 @@ cleanup(void)
     XSync(dpy, False);
     XCloseDisplay(dpy);
     unlink(socketpath);
+}
+
+
+void
+configure_x_geom(void)
+{
+    int x, y, i, j;
+    unsigned int du;
+    Window w, dw, *dws;
+    XWindowAttributes wa;
+    
+#ifdef XINERAMA
+    XineramaScreenInfo *info;
+    Window pw;
+    int a, di, n, area = 0;
+#endif
+
+#ifdef XINERAMA
+    i = 0;
+    if (parentwin == root && (info = XineramaQueryScreens(dpy, &n))) {
+	if (detectmon) {
+	    XGetInputFocus(dpy, &w, &di);
+	    if (mon >= 0 && mon < n)
+		i = mon;
+	    else if (w != root && w != PointerRoot && w != None) {
+		/* find top-level window containing current input focus */
+		do {
+		    if (XQueryTree(dpy, (pw = w), &dw, &w, &dws, &du) && dws)
+			XFree(dws);
+		} while (w != root && w != pw);
+		/* find xinerama screen with which the window intersects most */
+		if (XGetWindowAttributes(dpy, pw, &wa))
+		    for (j = 0; j < n; j++)
+			if ((a = INTERSECT(wa.x, wa.y, wa.width, wa.height, info[j])) > area) {
+			    area = a;
+			    i = j;
+			}
+	    }
+	    /* no focused window is on screen, so use pointer location instead */
+	    if (mon < 0 && !area && XQueryPointer(dpy, root, &dw, &dw, &x, &y, &di, &di, &du))
+		for (i = 0; i < n; i++)
+		    if (INTERSECT(x, y, 1, 1, info[i]))
+			break;
+	}
+
+	xin_x = info[i].x_org;
+	xin_y = info[i].y_org;
+
+	monw = info[i].width;
+	monh = info[i].height;
+
+	XFree(info);
+    }
+    else
+#endif
+    {
+	if (!XGetWindowAttributes(dpy, parentwin, &wa))
+	    die("could not get embedding window attributes: 0x%lx",
+		parentwin);
+
+	monw = wa.width;
+	monh = wa.height;
+    }
+    
+    max_lines = 8 * monh / 10 / bh;
 }
 
 
@@ -456,7 +527,7 @@ recieve_message(void)
 
     for (;;) {
 	if (msg_len > 0) {
-	    setdefaults();
+	    set_defaults();
 	    read_message();
 	    if (!linecnt)
 		break;
@@ -521,6 +592,8 @@ run(void)
 {
     pthread_t socket_handler, x_handler;
 
+    message_recieved = event_recieved = reconfigure = 0;
+
     pthread_create(&socket_handler, NULL, monitor_socket, NULL);
     sem_post(&mut_check_socket);
     
@@ -529,6 +602,9 @@ run(void)
     
     for (;;) {
 	sem_wait(&mut_resume);
+
+	if (reconfigure)
+	    configure_x_geom();
 	
 	if (message_recieved)
 	    recieve_message();
@@ -542,7 +618,7 @@ run(void)
 	}
 	
 	if (event_recieved) {
-	    event_recieved = 0;
+	    event_recieved = reconfigure = 0;
 	    sem_post(&mut_check_x);
 	}
     }
@@ -550,7 +626,7 @@ run(void)
 
 
 void
-setdefaults(void)
+set_defaults(void)
 {
     read_prof.id[0] = '\0';
     read_prof.expire = def_expire;
@@ -558,80 +634,6 @@ setdefaults(void)
     read_prof.center_text = def_center_text;
     read_prof.location = def_location;
     read_prof.progress_of = 0;
-}
-
-
-void
-setup_x(void)
-{
-    int x, y, i, j;
-    unsigned int du;
-    Window w, dw, *dws;
-    XWindowAttributes wa;
-#ifdef XINERAMA
-    XineramaScreenInfo *info;
-    Window pw;
-    int a, di, n, area = 0;
-#endif
-    
-    /* init appearance */
-    for (j = 0; j < SchemeLast; j++)
-	scheme[j] = drw_scm_create(drw, colors[j], 2);
-
-    /* menu geometry */
-#ifdef XINERAMA
-    i = 0;
-    if (parentwin == root && (info = XineramaQueryScreens(dpy, &n))) {
-	if (detectmon) {
-	    XGetInputFocus(dpy, &w, &di);
-	    if (mon >= 0 && mon < n)
-		i = mon;
-	    else if (w != root && w != PointerRoot && w != None) {
-		/* find top-level window containing current input focus */
-		do {
-		    if (XQueryTree(dpy, (pw = w), &dw, &w, &dws, &du) && dws)
-			XFree(dws);
-		} while (w != root && w != pw);
-		/* find xinerama screen with which the window intersects most */
-		if (XGetWindowAttributes(dpy, pw, &wa))
-		    for (j = 0; j < n; j++)
-			if ((a = INTERSECT(wa.x, wa.y, wa.width, wa.height, info[j])) > area) {
-			    area = a;
-			    i = j;
-			}
-	    }
-	    /* no focused window is on screen, so use pointer location instead */
-	    if (mon < 0 && !area && XQueryPointer(dpy, root, &dw, &dw, &x, &y, &di, &di, &du))
-		for (i = 0; i < n; i++)
-		    if (INTERSECT(x, y, 1, 1, info[i]))
-			break;
-	}
-
-	xin_x = info[i].x_org;
-	xin_y = info[i].y_org;
-
-	monw = info[i].width;
-	monh = info[i].height;
-
-	XFree(info);
-    } else
-#endif
-    {
-	if (!XGetWindowAttributes(dpy, parentwin, &wa))
-	    die("could not get embedding window attributes: 0x%lx",
-		parentwin);
-
-	monw = wa.width;
-	monh = wa.height;
-    }
-
-    bh = drw->fonts->h + 2;
-    max_lines = 8 * monh / 10 / bh;
-    
-    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
-	notifs[i].active = notifs[i].visible = 0;
-	create_window(&notifs[i].win);
-    }
 }
 
 
@@ -671,10 +673,13 @@ main(int argc, char *argv[])
     if (!XGetWindowAttributes(dpy, parentwin, &wa))
 	die("could not get embedding window attributes: 0x%lx",
 	    parentwin);
+    XSelectInput(dpy, root, StructureNotifyMask);
+    
     drw = drw_create(dpy, screen, root, wa.width, wa.height);
     if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
 	die("no fonts could be loaded.");
     lrpad = drw->fonts->h;
+    bh = drw->fonts->h + 2;
 
 #ifdef __OpenBSD__
     if (pledge("stdio rpath", NULL) == -1)
@@ -696,11 +701,17 @@ main(int argc, char *argv[])
 	die("could not listen to the socket");
     fcntl(sock_fd, F_SETFD, FD_CLOEXEC | fcntl(sock_fd, F_GETFD));
 
-    setup_x();
+    for (i = 0; i < SchemeLast; i++)
+	scheme[i] = drw_scm_create(drw, colors[i], 2);
+    
+    configure_x_geom();
     lines = malloc(max_lines * sizeof(char *));
 
-    for (i = 0; i < MAX_NOTIFICATIONS; i++)
+    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+	notifs[i].active = notifs[i].visible = 0;
+	create_window(&notifs[i].win);
 	order[i] = &notifs[i];
+    }
     
     sem_init(&mut_resume, 0, 1);
     sem_init(&mut_check_socket, 0, 1);
