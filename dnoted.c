@@ -303,7 +303,7 @@ cleanup(void)
 void
 configure_x_geom(void)
 {
-    int x, y, i, j;
+    int x, y, i, j, tmp;
     unsigned int du;
     Window w, dw, *dws;
     XWindowAttributes wa;
@@ -360,8 +360,12 @@ configure_x_geom(void)
 	monw = wa.width;
 	monh = wa.height;
     }
-    
-    max_lines = 8 * monh / 10 / bh;
+
+    tmp = monh - contents_padding_vertical * 2;
+    if (tmp <= 1)
+	max_lines = 1;
+    else
+	max_lines = 9 * tmp / 10 / bh;
 }
 
 
@@ -387,12 +391,14 @@ void
 draw_contents(Notification *n)
 {
     unsigned int i;
-    int y = 0;
+    int y;
 
     XMapWindow(dpy, n->win);
     
     drw_setscheme(drw, scheme[SchemeNorm]);
     drw_rect(drw, 0, 0, n->mw, n->mh, 1, 1);
+
+    y = contents_padding_vertical;
 
     for (i = 0; i < linecnt; i++) {
 	drw_text(drw, n->prof.center_text ? (n->mw - TEXTW(lines[i]))/2 : 0, y, n->mw, bh, lrpad / 2, lines[i], 0);
@@ -402,12 +408,21 @@ draw_contents(Notification *n)
     if (n->prof.progress_of) {
 	drw_setscheme(drw, scheme[SchemeBar]);
 		
-	if (bar_outer_pad + bar_inner_pad >= bh / 2
-	    || bar_outer_pad + bar_inner_pad >= n->mw / 2)
-	    bar_outer_pad = bar_inner_pad = 0;
+	if (bar_outer_padding + bar_inner_padding >= bh / 2
+	    || bar_outer_padding + bar_inner_padding >= n->mw / 2)
+	    bar_outer_padding = bar_inner_padding = 0;
 
-	drw_rect(drw, bar_outer_pad, y + bar_outer_pad, n->mw - 2 * bar_outer_pad, bh - 2 * bar_outer_pad, 1, 1);
-	drw_rect(drw, bar_outer_pad + bar_inner_pad, y + bar_outer_pad + bar_inner_pad, n->prof.progress_val * (n->mw - 2 * (bar_outer_pad + bar_inner_pad)) / n->prof.progress_of, bh - 2 * (bar_outer_pad + bar_inner_pad), 1, 0);
+	drw_rect(drw,
+		 bar_outer_padding,
+		 y + bar_outer_padding,
+		 n->mw - 2 * bar_outer_padding,
+		 bh - 2 * bar_outer_padding,
+		 1, 1);
+	drw_rect(drw, bar_outer_padding + bar_inner_padding,
+		 y + bar_outer_padding + bar_inner_padding,
+		 n->prof.progress_val * (n->mw - 2 * (bar_outer_padding + bar_inner_padding)) / n->prof.progress_of,
+		 bh - 2 * (bar_outer_padding + bar_inner_padding),
+		 1, 0);
 	drw_setscheme(drw, scheme[SchemeNorm]);
     }
 
@@ -428,7 +443,7 @@ make_geometry(Notification *n)
 	    inputw = tmpmax;
     }
 
-    n->mh = (linecnt + ((n->prof.progress_of) ? 1 : 0)) * bh;
+    n->mh = (linecnt + ((n->prof.progress_of) ? 1 : 0)) * bh + contents_padding_vertical * 2;
     n->mw = MIN(MAX(inputw, n->prof.min_width), 8 * monw / 10);
 
     XResizeWindow(dpy, n->win, n->mw, n->mh);
@@ -679,7 +694,7 @@ main(int argc, char *argv[])
     if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
 	die("no fonts could be loaded.");
     lrpad = drw->fonts->h;
-    bh = drw->fonts->h + 2;
+    bh = drw->fonts->h + text_padding;
 
 #ifdef __OpenBSD__
     if (pledge("stdio rpath", NULL) == -1)
