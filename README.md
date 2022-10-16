@@ -1,5 +1,7 @@
 # dnote
 
+![screenshot](/screenshot.png "screenshot")
+
 ## Introduction
 Dnote is a notification utility for X based on dmenu. It is suitable for handling requests in quick succession and allows for the construction of a progress bar, making it ideal for volume indicators, etc.
 
