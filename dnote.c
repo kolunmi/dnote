@@ -25,26 +25,22 @@ usage(void) {
     exit(1);
 }
 
+
 int
 main(int argc, char *argv[]) {
     int i, j;
-    char *emit;
+    char emit[MESSAGE_SIZE];
     char buf[BUFSIZ];
-    size_t len = 0;
+    size_t len, tmplen;
     unsigned int tmp1, tmp2;
 
-    emit = malloc(MESSAGE_SIZE);
-
-    for (i = 1; i <= argc; i++) {
-	if (i >= MESSAGE_SIZE / sizeof *emit)
-	    die("message arguments exceed max size");
-
-	if (i == argc) {
-	    strcpy(emit + len, "\n");
-	    len++;
-	    break;
-	}
-
+    int sock_fd;
+    struct sockaddr_un sock_address;
+    char *dispname;
+    
+    len = 0;
+    
+    for (i = 1; i < argc; i++) {
 	/* these options take no arguments */
 	if (!strcmp(argv[i], "-v")) {
 	    puts("dnote-"VERSION);
@@ -62,11 +58,11 @@ main(int argc, char *argv[]) {
 	/* these options take 1 argument */
 	else if (!strcmp(argv[i], "-minw")) {
 	    tmp1 = atoi(argv[++i]);
-	    snprintf(buf, sizeof buf, "w%i:", tmp1);
+	    snprintf(buf, sizeof buf, "w%i", tmp1);
 	} else if (!strcmp(argv[i], "-exp")) {
 	    tmp1 = atoi(argv[++i]);
 	    if (tmp1)
-		snprintf(buf, sizeof buf, "e%i:", tmp1);
+		snprintf(buf, sizeof buf, "e%i", tmp1);
 	    else
 		strcpy(buf, "z");
 	} else if (!strcmp(argv[i], "-loc")) {
@@ -81,10 +77,7 @@ main(int argc, char *argv[]) {
 		argv[i][MAX_ID_LEN - 1] = '\0';
 		tmp1 = MAX_ID_LEN;
 	    }
-	    for (j = 0; j < tmp1; j++)
-		if (argv[i][j] == ':')
-		    die("id cannot contain the character ':'");
-	    snprintf(buf, sizeof buf, "i%s:", argv[i]);
+	    snprintf(buf, sizeof buf, "i%s", argv[i]);
 	}
 	else if (i + 2 >= argc) {
 	    usage();
@@ -95,20 +88,27 @@ main(int argc, char *argv[]) {
 	    tmp2 = atoi(argv[++i]);
 	    if (!tmp2 || tmp1 > tmp2)
 		die("-pbar : invalid arguments");
-	    snprintf(buf, sizeof buf, "p%i/%i:", tmp1, tmp2); 
+	    snprintf(buf, sizeof buf, "p%i/%i", tmp1, tmp2); 
 	} else
 	    usage();
 
+	tmplen = len + strlen(buf) + 1;
+	if (tmplen >= MESSAGE_SIZE)
+	    die("message args exceed max size");
 	strcpy(emit + len, buf);
-	len += strlen(buf);
+	len = tmplen;
     }
 
-    int sock_fd;
-    struct sockaddr_un sock_address;
 
+    if (len < MESSAGE_SIZE - 1)
+	emit[len++] = '\n';
+    else
+	die("message args exceed max size");
+
+    
     sock_address.sun_family = AF_UNIX;
-
-    char *dispname = XDisplayName(NULL);
+    dispname = XDisplayName(NULL);
+    
     if (dispname)
 	if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, SOCKET_PATH, dispname) == -1)
 	    die("cannot write the socket path");
@@ -117,15 +117,17 @@ main(int argc, char *argv[]) {
     if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof(sock_address)) == -1)
 	die("failed to connect to the socket");
 
+    
     for (i = 0; fgets(buf, sizeof buf, stdin); i++) {
-	if (i + 1 >= MESSAGE_SIZE / sizeof *emit) {
-	    fputs("warning: message exceeds max size\n", stderr);
+	tmplen = len + strlen(buf);
+	if (tmplen >= MESSAGE_SIZE) {
+	    fputs("warning: message exceeds max size; trimming\n", stderr);
 	    break;
 	}
 	strcpy(emit + len, buf);
-	len += strlen(buf);
+	len = tmplen;
     }
 
-    if (send(sock_fd, emit, MESSAGE_SIZE, 0) == -1)
-	die("Failed to send data");
+    if (send(sock_fd, emit, len, 0) == -1)
+	die("failed to send the data");
 }

@@ -394,7 +394,8 @@ draw_contents(Notification *n)
     int y;
 
     XMapWindow(dpy, n->win);
-    
+
+    drw_resize(drw, n->mw, n->mh);
     drw_setscheme(drw, scheme[SchemeNorm]);
     drw_rect(drw, 0, 0, n->mw, n->mh, 1, 1);
 
@@ -423,6 +424,7 @@ draw_contents(Notification *n)
 		 n->prof.progress_val * (n->mw - 2 * (bar_outer_padding + bar_inner_padding)) / n->prof.progress_of,
 		 bh - 2 * (bar_outer_padding + bar_inner_padding),
 		 1, 0);
+	
 	drw_setscheme(drw, scheme[SchemeNorm]);
     }
 
@@ -447,7 +449,6 @@ make_geometry(Notification *n)
     n->mw = MIN(MAX(inputw, n->prof.min_width), 8 * monw / 10);
 
     XResizeWindow(dpy, n->win, n->mw, n->mh);
-    drw_resize(drw, n->mw, n->mh);
 }
 
 
@@ -462,61 +463,65 @@ read_message(void)
     linecnt = 0;
 
     for (i = 0, j = 0; i < msg_len; i++) {
-	if (msg[i] == '\0' || msg[i] == '\n') {
-	    if (optblk) {
+	if (optblk) {
+	    switch (msg[i]) {
+	    case '\n':
 		optblk = 0;
-		j++;
-		continue;
+		j = i + 1;
+		break;
+	    case 'c':
+		i++;
+		read_prof.center_text = 1;
+		break;
+	    case 'n':
+		i++;
+		read_prof.center_text = 0;
+		break;
+	    case 'z':
+		i++;
+		read_prof.expire = 0;
+		break;
+	    case 'p':
+		i++;
+		if ((p = strchr(msg + i, '/')))
+		    *p = '\0';
+		read_prof.progress_val = atoi(msg + i);
+		i += strlen(msg + i) + 1;
+		read_prof.progress_of = atoi(msg + i);
+		i += strlen(msg + i);
+		break;
+	    case 'e':
+		i++;
+		read_prof.expire = atoi(msg + i);
+		i += strlen(msg + i);
+		break;
+	    case 'w':
+		i++;
+		read_prof.min_width = atoi(msg + i);
+		i += strlen(msg + i);
+		break;
+	    case 'l':
+		i++;
+		read_prof.location = atoi(msg + i);
+		i += strlen(msg + i);
+		break;
+	    case 'i':
+		i++;
+		strncpy(read_prof.id, msg + i, sizeof read_prof.id);
+		i += strlen(msg + i);
+		break;
 	    }
-
-	    lines[linecnt] = msg + j;
+	}
+	else if (msg[i] == '\0' || msg[i] == '\n') {
+	    lines[linecnt++] = msg + j;
 	    j = i + 1;
-
-	    linecnt++;
 	    
 	    if (read_prof.progress_of && linecnt >= max_lines - 1)
 		break;
 	    if (linecnt >= max_lines)
 		break;
-	    if (msg[i] == '\0' || msg[i+1] == '\0')
+	    if (msg[i] == '\0') // || msg[i + 1] == '\0')
 		break;
-
-	} else if (optblk) {
-	    switch (msg[i]) {
-	    case 'c':
-		read_prof.center_text = 1;
-		break;
-	    case 'n':
-		read_prof.center_text = 0;
-		break;
-	    case 'p':
-		strfindtrans(optbuf, msg, '/', &i);
-		read_prof.progress_val = atoi(optbuf);
-		strfindtrans(optbuf, msg, ':', &i);
-		read_prof.progress_of = atoi(optbuf);
-		break;
-	    case 'z':
-		read_prof.expire = 0;
-		break;
-	    case 'e':
-		strfindtrans(optbuf, msg, ':', &i);
-		read_prof.expire = atoi(optbuf);
-		break;
-	    case 'w':
-		strfindtrans(optbuf, msg, ':', &i);
-		read_prof.min_width = atoi(optbuf);
-		break;
-	    case 'l':
-		optbuf[0] = msg[++i];
-		optbuf[1] = '\0';
-		read_prof.location = atoi(optbuf);
-		break;
-	    case 'i':
-		strfindtrans(read_prof.id, msg, ':', &i);
-		break;
-	    }
-			
-	    j = i + 1;
 	}
     }
 
