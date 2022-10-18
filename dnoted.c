@@ -3,6 +3,7 @@
 #include <locale.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,16 +45,17 @@ typedef struct {
     unsigned int min_width;
     unsigned int location;
     unsigned int progress_val, progress_of;
+    char cmd[MAX_SHCMD_LEN];
     
 } Profile;
 
 typedef struct {
     
-    int active, visible;
+    int active, visible, selected;
     Window win;
-    int mw, mh, wx, wy;
+    int wx, wy;
+    unsigned int mw, mh;
     pthread_t timer;
-    int inited;
     Profile prof;
     
 } Notification;
@@ -104,6 +106,7 @@ static Notification *order[MAX_NOTIFICATIONS];
 static Profile read_prof;
 
 static char **lines = NULL;
+static size_t lines_size;
 static unsigned int linecnt;
 static unsigned int max_lines;
 
@@ -171,7 +174,9 @@ monitor_x(void *arg)
 		    else if (ev.type == ButtonPress) {
 			if (ev.xbutton.window != notifs[i].win)
 			    continue;
-			if (ev.xbutton.button != Button1)
+			if (ev.xbutton.button == Button1)
+			    notifs[i].selected = 1;
+			else if (ev.xbutton.button != Button3)
 			    break;
 			post = 1;
 			break;
@@ -281,6 +286,15 @@ cancel_inactive(void)
 	if (notifs[i].active && !notifs[i].visible) {
 	    if (notifs[i].prof.expire)
 		pthread_cancel(notifs[i].timer);
+	    
+	    if (notifs[i].selected && notifs[i].prof.cmd[0] != '\0') {
+		if (fork() == 0) {
+		    execl("/bin/sh", "sh", "-c", notifs[i].prof.cmd, NULL);
+		    exit(EXIT_SUCCESS);
+		}
+		notifs[i].selected = 0;
+	    }
+	    
 	    XUnmapWindow(dpy, notifs[i].win);
 	    notifs[i].active = 0;
 	}
@@ -307,6 +321,7 @@ configure_x_geom(void)
     unsigned int du;
     Window w, dw, *dws;
     XWindowAttributes wa;
+    size_t size_tmp;
     
 #ifdef XINERAMA
     XineramaScreenInfo *info;
@@ -366,6 +381,13 @@ configure_x_geom(void)
 	max_lines = 1;
     else
 	max_lines = 9 * tmp / 10 / bh;
+
+    size_tmp = max_lines * sizeof(char *);
+    if (size_tmp >= lines_size) {
+	lines_size = size_tmp;
+	if (!(lines = realloc(lines, lines_size)))
+	    die("cannot realloc %u bytes:", lines_size);
+    }
 }
 
 
@@ -488,6 +510,11 @@ read_message(void)
 		read_prof.progress_val = atoi(msg + i);
 		i += strlen(msg + i) + 1;
 		read_prof.progress_of = atoi(msg + i);
+		i += strlen(msg + i);
+		break;
+	    case 's':
+		i++;
+		strncpy(read_prof.cmd, msg + i, sizeof read_prof.cmd);
 		i += strlen(msg + i);
 		break;
 	    case 'e':
@@ -649,6 +676,7 @@ void
 set_defaults(void)
 {
     read_prof.id[0] = '\0';
+    read_prof.cmd[0] = '\0';
     read_prof.expire = def_expire;
     read_prof.min_width = def_min_width;
     read_prof.center_text = def_center_text;
@@ -723,12 +751,12 @@ main(int argc, char *argv[])
 
     for (i = 0; i < SchemeLast; i++)
 	scheme[i] = drw_scm_create(drw, colors[i], 2);
-    
+
+    lines_size = 0;
     configure_x_geom();
-    lines = malloc(max_lines * sizeof(char *));
 
     for (i = 0; i < MAX_NOTIFICATIONS; i++) {
-	notifs[i].active = notifs[i].visible = 0;
+	notifs[i].active = notifs[i].visible = notifs[i].selected = 0;
 	create_window(&notifs[i].win);
 	order[i] = &notifs[i];
     }

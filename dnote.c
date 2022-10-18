@@ -19,6 +19,7 @@ usage(void) {
 	  "	-nc			don't center text\n"
 	  "	-loc [0-8]		window location option\n"
 	  "	-pbar [val] [out of]	construct a progress bar\n"
+	  "	-cmd [command]		run shell command when window is clicked\n"
 	  "	-v			print version info\n"
 	  "	-h			print this help text\n"
 	  , stderr);
@@ -59,18 +60,21 @@ main(int argc, char *argv[]) {
 	else if (!strcmp(argv[i], "-minw")) {
 	    tmp1 = atoi(argv[++i]);
 	    snprintf(buf, sizeof buf, "w%i", tmp1);
-	} else if (!strcmp(argv[i], "-exp")) {
+	}
+	else if (!strcmp(argv[i], "-exp")) {
 	    tmp1 = atoi(argv[++i]);
 	    if (tmp1)
 		snprintf(buf, sizeof buf, "e%i", tmp1);
 	    else
 		strcpy(buf, "z");
-	} else if (!strcmp(argv[i], "-loc")) {
+	}
+	else if (!strcmp(argv[i], "-loc")) {
 	    tmp1 = atoi(argv[++i]);
 	    if (tmp1 > 8)
 		die("-loc : invalid location specifier");
 	    snprintf(buf, sizeof buf, "l%i", tmp1);
-	} else if (!strcmp(argv[i], "-id")) {
+	}
+	else if (!strcmp(argv[i], "-id")) {
 	    i++;
 	    tmp1 = strlen(argv[i]);
 	    if (tmp1 > MAX_ID_LEN) {
@@ -78,6 +82,9 @@ main(int argc, char *argv[]) {
 		tmp1 = MAX_ID_LEN;
 	    }
 	    snprintf(buf, sizeof buf, "i%s", argv[i]);
+	}
+	else if (!strcmp(argv[i], "-cmd")) {
+	    snprintf(buf, MAX_SHCMD_LEN, "s%s", argv[++i]);
 	}
 	else if (i + 2 >= argc) {
 	    usage();
@@ -89,7 +96,8 @@ main(int argc, char *argv[]) {
 	    if (!tmp2 || tmp1 > tmp2)
 		die("-pbar : invalid arguments");
 	    snprintf(buf, sizeof buf, "p%i/%i", tmp1, tmp2); 
-	} else
+	}
+	else
 	    usage();
 
 	tmplen = len + strlen(buf) + 1;
