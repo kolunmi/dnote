@@ -34,6 +34,7 @@ main(int argc, char *argv[]) {
     char buf[BUFSIZ];
     size_t len, tmplen;
     unsigned int tmp1, tmp2;
+    float tmpf;
 
     int sock_fd;
     struct sockaddr_un sock_address;
@@ -62,9 +63,9 @@ main(int argc, char *argv[]) {
 	    snprintf(buf, sizeof buf, "w%i", tmp1);
 	}
 	else if (!strcmp(argv[i], "-exp")) {
-	    tmp1 = atoi(argv[++i]);
-	    if (tmp1)
-		snprintf(buf, sizeof buf, "e%i", tmp1);
+	    tmpf = atof(argv[++i]);
+	    if (tmpf)
+		snprintf(buf, sizeof buf, "e%f", tmpf);
 	    else
 		strcpy(buf, "z");
 	}

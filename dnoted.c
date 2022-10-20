@@ -41,7 +41,7 @@ typedef struct {
 
     char id[MAX_ID_LEN];
     int center_text;
-    unsigned int expire;
+    float expire;
     unsigned int min_width;
     unsigned int location;
     unsigned int progress_val, progress_of;
@@ -55,7 +55,7 @@ typedef struct {
     Window win;
     int wx, wy;
     unsigned int mw, mh;
-    pthread_t timer;
+    float elapsed;
     Profile prof;
     
 } Notification;
@@ -114,11 +114,25 @@ static unsigned int max_lines;
 void *
 count_down(void *arg)
 {
-    Notification *n = arg;
+    unsigned int i;
+    struct timespec remaining, request = {0, 1000000000 / 20};
+
+    for (;;) {
+	nanosleep(&request, &remaining);
+
+	for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+	    if (!notifs[i].active || !notifs[i].visible || !notifs[i].prof.expire)
+		continue;
+	    
+	    notifs[i].elapsed += 0.05;
+	    if (notifs[i].elapsed >= notifs[i].prof.expire) {
+		notifs[i].visible = 0;
+		sem_post(&mut_resume);
+	    }
+	}
+
+    }
     
-    sleep(n->prof.expire);
-    n->visible = 0;
-    sem_post(&mut_resume);
     return 0;
 }
 
@@ -284,8 +298,9 @@ cancel_inactive(void)
     
     for (i = 0; i < MAX_NOTIFICATIONS; i++)
 	if (notifs[i].active && !notifs[i].visible) {
-	    if (notifs[i].prof.expire)
-		pthread_cancel(notifs[i].timer);
+	    notifs[i].active = 0;
+	    
+	    notifs[i].elapsed = 0;
 	    
 	    if (notifs[i].selected && notifs[i].prof.cmd[0] != '\0') {
 		if (fork() == 0) {
@@ -296,7 +311,6 @@ cancel_inactive(void)
 	    }
 	    
 	    XUnmapWindow(dpy, notifs[i].win);
-	    notifs[i].active = 0;
 	}
 }
 
@@ -519,7 +533,7 @@ read_message(void)
 		break;
 	    case 'e':
 		i++;
-		read_prof.expire = atoi(msg + i);
+		read_prof.expire = atof(msg + i);
 		i += strlen(msg + i);
 		break;
 	    case 'w':
@@ -588,7 +602,7 @@ recieve_message(void)
 		    if (notifs[i].prof.id[0] != '\0'
 			&& !strcmp(notifs[i].prof.id, read_prof.id)) {
 			n = &notifs[i];
-			pthread_cancel(n->timer);
+			n->elapsed = 0;
 			n->active = 1;
 			break;
 		    }
@@ -626,9 +640,6 @@ recieve_message(void)
 	n->active = 1;
 	n->visible = 1;
 		
-	if (n->prof.expire)
-	    pthread_create(&n->timer, NULL, count_down, n);
-
 	break;
     }
 }
@@ -637,7 +648,7 @@ recieve_message(void)
 void
 run(void)
 {
-    pthread_t socket_handler, x_handler;
+    pthread_t socket_handler, x_handler, timer;
 
     message_recieved = event_recieved = reconfigure = 0;
 
@@ -646,6 +657,8 @@ run(void)
     
     pthread_create(&x_handler, NULL, monitor_x, NULL);
     sem_post(&mut_check_x);
+
+    pthread_create(&timer, NULL, count_down, NULL);
     
     for (;;) {
 	sem_wait(&mut_resume);
