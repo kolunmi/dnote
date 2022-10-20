@@ -28,7 +28,7 @@
 #define INTERSECT(x,y,w,h,r)  (MAX(0, MIN((x)+(w),(r).x_org+(r).width)  - MAX((x),(r).x_org)) \
 			       && MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
 #define LENGTH(X)             (sizeof X / sizeof X[0])
-#define TEXTW(X)              (drw_fontset_getwidth(drw, (X)) + lrpad)
+#define TEXTW(X, Y)           (drw_fontset_getwidth((X), (Y)) + lrpad)
 
 
 enum { SchemeNorm, SchemeSel, SchemeBar, SchemeLast }; /* color schemes */
@@ -53,6 +53,7 @@ typedef struct {
     
     int active, visible, selected;
     Window win;
+    Drw *drw;
     int wx, wy;
     unsigned int mw, mh;
     float elapsed;
@@ -83,7 +84,6 @@ static int sock_fd, cli_fd;
 
 static Display *dpy;
 static Window root, parentwin;
-static Drw *drw;
 static Clr *scheme[SchemeLast];
 static int bh;
 static unsigned int monw, monh;
@@ -173,11 +173,21 @@ monitor_x(void *arg)
 		    if (!notifs[i].active)
 			continue;
 
-		    if (ev.type == VisibilityNotify) {
+		    if (ev.type == Expose) {
+			if (ev.xexpose.window != notifs[i].win)
+			    continue;
+			if (ev.xexpose.count == 0) {
+			    XRaiseWindow(dpy, notifs[i].win);
+			    drw_map(notifs[i].drw, notifs[i].win, 0, 0, notifs[i].mw, notifs[i].mh);
+			}
+			break;
+		    }
+		    else if (ev.type == VisibilityNotify) {
 			if (ev.xvisibility.window != notifs[i].win)
 			    continue;
 			if (ev.xvisibility.state != VisibilityUnobscured)
 			    XRaiseWindow(dpy, notifs[i].win);
+			break;
 		    }
 		    else if (ev.type == DestroyNotify) {
 			if (ev.xdestroywindow.window != notifs[i].win)
@@ -195,7 +205,6 @@ monitor_x(void *arg)
 			post = 1;
 			break;
 		    }
-		
 		}
 	    
 	    if (post) {
@@ -286,6 +295,14 @@ arrange(void)
 	XMapRaised(dpy, n->win);
 	XMoveWindow(dpy, n->win, n->wx, n->wy);
     }
+
+    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+	n = order[i];
+	if (!n->active || !n->visible)
+	    continue;
+	
+	drw_map(n->drw, n->win, 0, 0, n->mw, n->mh);
+    }
     
     XSync(dpy, False);
 }
@@ -318,10 +335,11 @@ cancel_inactive(void)
 void
 cleanup(void)
 {
-    size_t i;
+    unsigned int i;
     for (i = 0; i < SchemeLast; i++)
 	free(scheme[i]);
-    drw_free(drw);
+    for (i = 0; i < MAX_NOTIFICATIONS; i++)
+	drw_free(notifs[i].drw);
     XSync(dpy, False);
     XCloseDisplay(dpy);
     unlink(socketpath);
@@ -413,13 +431,12 @@ create_window (Window *win)
     
     swa.override_redirect = True;
     swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
-    swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask;
+    swa.event_mask = ExposureMask | KeyPressMask | ButtonPressMask | VisibilityChangeMask | SubstructureNotifyMask;
     *win = XCreateWindow(dpy, parentwin, 0, 0, 1, 1, border_width,
 			CopyFromParent, CopyFromParent, CopyFromParent,
 			CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
     XSetWindowBorder(dpy, *win, scheme[SchemeSel][ColBg].pixel);
     XSetClassHint(dpy, *win, &ch);
-    XSelectInput(dpy, *win, ButtonPressMask | FocusChangeMask | SubstructureNotifyMask);
 }
 
 
@@ -431,40 +448,39 @@ draw_contents(Notification *n)
 
     XMapWindow(dpy, n->win);
 
-    drw_resize(drw, n->mw, n->mh);
-    drw_setscheme(drw, scheme[SchemeNorm]);
-    drw_rect(drw, 0, 0, n->mw, n->mh, 1, 1);
+    drw_resize(n->drw, n->mw, n->mh);
+    drw_setscheme(n->drw, scheme[SchemeNorm]);
+    drw_rect(n->drw, 0, 0, n->mw, n->mh, 1, 1);
 
     y = contents_padding_vertical;
 
     for (i = 0; i < linecnt; i++) {
-	drw_text(drw, n->prof.center_text ? (n->mw - TEXTW(lines[i]))/2 : 0, y, n->mw, bh, lrpad / 2, lines[i], 0);
+	drw_text(n->drw, n->prof.center_text ? (n->mw - TEXTW(n->drw, lines[i]))/2 : 0, y, n->mw, bh, lrpad / 2, lines[i], 0);
 	y += bh;
     }
 
     if (n->prof.progress_of) {
-	drw_setscheme(drw, scheme[SchemeBar]);
+	drw_setscheme(n->drw, scheme[SchemeBar]);
 		
 	if (bar_outer_padding + bar_inner_padding >= bh / 2
 	    || bar_outer_padding + bar_inner_padding >= n->mw / 2)
 	    bar_outer_padding = bar_inner_padding = 0;
 
-	drw_rect(drw,
+	drw_rect(n->drw,
 		 bar_outer_padding,
 		 y + bar_outer_padding,
 		 n->mw - 2 * bar_outer_padding,
 		 bh - 2 * bar_outer_padding,
 		 1, 1);
-	drw_rect(drw, bar_outer_padding + bar_inner_padding,
+	drw_rect(n->drw,
+		 bar_outer_padding + bar_inner_padding,
 		 y + bar_outer_padding + bar_inner_padding,
 		 n->prof.progress_val * (n->mw - 2 * (bar_outer_padding + bar_inner_padding)) / n->prof.progress_of,
 		 bh - 2 * (bar_outer_padding + bar_inner_padding),
 		 1, 0);
 	
-	drw_setscheme(drw, scheme[SchemeNorm]);
+	drw_setscheme(n->drw, scheme[SchemeNorm]);
     }
-
-    drw_map(drw, n->win, 0, 0, n->mw, n->mh);
 }
 
 
@@ -476,7 +492,7 @@ make_geometry(Notification *n)
     inputw = tmpmax = 0;
     
     for (i = 0; i < linecnt; i++) {
-	tmpmax = TEXTW(lines[i]);
+	tmpmax = TEXTW(n->drw, lines[i]);
 	if (tmpmax > inputw)
 	    inputw = tmpmax;
     }
@@ -723,32 +739,8 @@ main(int argc, char *argv[])
 	    exit(1);
 	}
     }
-
-    if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
-	fputs("warning: no locale support\n", stderr);
-    if (!(dpy = XOpenDisplay(NULL)))
-	die("cannot open display");
-    screen = DefaultScreen(dpy);
-    root = RootWindow(dpy, screen);
-    parentwin = root;
-    if (!XGetWindowAttributes(dpy, parentwin, &wa))
-	die("could not get embedding window attributes: 0x%lx",
-	    parentwin);
-    XSelectInput(dpy, root, StructureNotifyMask);
     
-    drw = drw_create(dpy, screen, root, wa.width, wa.height);
-    if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
-	die("no fonts could be loaded.");
-    lrpad = drw->fonts->h;
-    bh = drw->fonts->h + text_padding;
-
-#ifdef __OpenBSD__
-    if (pledge("stdio rpath", NULL) == -1)
-	die("pledge");
-#endif
-
     snprintf(socketpath, sizeof socketpath, SOCKET_PATH, XDisplayName(NULL));
-
     sock_address.sun_family = AF_UNIX;
     if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, "%s", socketpath) == -1)
 	die("could not write the socket path");
@@ -762,17 +754,41 @@ main(int argc, char *argv[])
 	die("could not listen to the socket");
     fcntl(sock_fd, F_SETFD, FD_CLOEXEC | fcntl(sock_fd, F_GETFD));
 
+    
+    if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
+	fputs("warning: no locale support\n", stderr);
+    if (!(dpy = XOpenDisplay(NULL)))
+	die("cannot open display");
+    screen = DefaultScreen(dpy);
+    root = RootWindow(dpy, screen);
+    parentwin = root;
+    if (!XGetWindowAttributes(dpy, parentwin, &wa))
+	die("could not get embedding window attributes: 0x%lx",
+	    parentwin);
+    XSelectInput(dpy, root, StructureNotifyMask);
+
+    notifs[0].drw = drw_create(dpy, screen, root, wa.width, wa.height);
+    if (!drw_fontset_create(notifs[0].drw, fonts, LENGTH(fonts)))
+	die("no fonts could be loaded.");
     for (i = 0; i < SchemeLast; i++)
-	scheme[i] = drw_scm_create(drw, colors[i], 2);
+	scheme[i] = drw_scm_create(notifs[0].drw, colors[i], 2);
+    
+    lrpad = notifs[0].drw->fonts->h;
+    bh = notifs[0].drw->fonts->h + text_padding;
+    
+    for (i = 1; i < MAX_NOTIFICATIONS; i++) {
+	notifs[i].drw = drw_create(dpy, screen, root, wa.width, wa.height);
+	notifs[i].drw->fonts = notifs[0].drw->fonts;
+    }
+
+    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+	create_window(&notifs[i].win);
+	notifs[i].active = notifs[i].visible = notifs[i].selected = 0;
+	order[i] = &notifs[i];
+    }
 
     lines_size = 0;
     configure_x_geom();
-
-    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
-	notifs[i].active = notifs[i].visible = notifs[i].selected = 0;
-	create_window(&notifs[i].win);
-	order[i] = &notifs[i];
-    }
     
     sem_init(&mut_resume, 0, 1);
     sem_init(&mut_check_socket, 0, 1);
