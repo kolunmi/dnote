@@ -644,7 +644,6 @@ run(void)
 
     pthread_create(&timer, NULL, count_down, NULL);
 
-    int i = 0;
     for (;;) {
 	sem_wait(&mut_resume);
 
