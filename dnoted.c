@@ -78,7 +78,7 @@ void set_defaults(void);
 void usage(void);
 
 
-static char socketpath[BUFSIZ];
+static char socketpath[256];
 static int sock_fd, cli_fd;
 
 static Display *dpy;
@@ -138,7 +138,7 @@ count_down(void *arg)
 
 
 void *
-monitor_socket (void *arg)
+monitor_socket(void *arg)
 {
     for (;;) {
 	sem_wait(&mut_check_socket);
@@ -493,7 +493,7 @@ read_message(void)
 {
     size_t i, j;
     int optblk;
-    char optbuf[BUFSIZ], *p;
+    char *p;
 
     optblk = 1;
     linecnt = 0;
