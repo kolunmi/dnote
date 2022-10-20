@@ -349,51 +349,20 @@ cleanup(void)
 void
 configure_x_geom(void)
 {
-    int x, y, i, j, tmp;
-    unsigned int du;
-    Window w, dw, *dws;
-    XWindowAttributes wa;
+    int tmp;
     size_t size_tmp;
+    XWindowAttributes wa;
     
 #ifdef XINERAMA
+    int n;
     XineramaScreenInfo *info;
-    Window pw;
-    int a, di, n, area = 0;
-#endif
-
-#ifdef XINERAMA
-    i = 0;
+    
     if (parentwin == root && (info = XineramaQueryScreens(dpy, &n))) {
-	if (detectmon) {
-	    XGetInputFocus(dpy, &w, &di);
-	    if (mon >= 0 && mon < n)
-		i = mon;
-	    else if (w != root && w != PointerRoot && w != None) {
-		/* find top-level window containing current input focus */
-		do {
-		    if (XQueryTree(dpy, (pw = w), &dw, &w, &dws, &du) && dws)
-			XFree(dws);
-		} while (w != root && w != pw);
-		/* find xinerama screen with which the window intersects most */
-		if (XGetWindowAttributes(dpy, pw, &wa))
-		    for (j = 0; j < n; j++)
-			if ((a = INTERSECT(wa.x, wa.y, wa.width, wa.height, info[j])) > area) {
-			    area = a;
-			    i = j;
-			}
-	    }
-	    /* no focused window is on screen, so use pointer location instead */
-	    if (mon < 0 && !area && XQueryPointer(dpy, root, &dw, &dw, &x, &y, &di, &di, &du))
-		for (i = 0; i < n; i++)
-		    if (INTERSECT(x, y, 1, 1, info[i]))
-			break;
-	}
+	xin_x = info[0].x_org;
+	xin_y = info[0].y_org;
 
-	xin_x = info[i].x_org;
-	xin_y = info[i].y_org;
-
-	monw = info[i].width;
-	monh = info[i].height;
+	monw = info[0].width;
+	monh = info[0].height;
 
 	XFree(info);
     }
@@ -401,8 +370,7 @@ configure_x_geom(void)
 #endif
     {
 	if (!XGetWindowAttributes(dpy, parentwin, &wa))
-	    die("could not get embedding window attributes: 0x%lx",
-		parentwin);
+	    die("could not get embedding window attributes: 0x%lx", parentwin);
 
 	monw = wa.width;
 	monh = wa.height;
@@ -675,7 +643,8 @@ run(void)
     sem_post(&mut_check_x);
 
     pthread_create(&timer, NULL, count_down, NULL);
-    
+
+    int i = 0;
     for (;;) {
 	sem_wait(&mut_resume);
 
@@ -684,7 +653,7 @@ run(void)
 	
 	if (message_recieved)
 	    recieve_message();
-
+	
 	cancel_inactive();
 	arrange();
 	

@@ -10,7 +10,6 @@ static unsigned int bar_outer_padding = 7;                /* cosmetic padding be
 static unsigned int bar_inner_padding = 4;                /* cosmetic padding between progress bar background and foreground */
 static const int border_padding = 50;                     /* cosmetic padding between notifications and screen border */
 static const int inter_padding = 20;                      /* cosmetic padding between notifications */
-static const int detectmon = 0;                           /* choose currently focused monitor rather than main */
 
 /* def_location values correspond to these positions on your screen
 	|---+---+---|
