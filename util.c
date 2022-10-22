@@ -35,14 +35,3 @@ ecalloc(size_t nmemb, size_t size)
 	die("calloc:");
     return p;
 }
-
-void
-strfindtrans (char *dest, char *src, char find, size_t *from)
-{
-    unsigned int cnt;
-
-    cnt = 0;
-    while (src[++*from] != find)
-	dest[cnt++] = src[*from];
-    dest[cnt] = '\0';
-}

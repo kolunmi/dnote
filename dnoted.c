@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <locale.h>
 #include <pthread.h>
@@ -695,9 +696,13 @@ int
 main(int argc, char *argv[])
 {
     unsigned int i, arg;
+    DIR *dir;
+    struct dirent *de;
+    char dpy_name[64], *dpy_name_ptr;
     XWindowAttributes wa;
     struct sockaddr_un sock_address;
 
+    
     if (argc >= 2) {
 	if (!strcmp(argv[1], "-v")) {
 	    puts("dnoted-"VERSION);
@@ -707,9 +712,36 @@ main(int argc, char *argv[])
 	    exit(1);
 	}
     }
+
     
-    snprintf(socketpath, sizeof socketpath, SOCKET_PATH, XDisplayName(NULL));
+    if ((dpy = XOpenDisplay(NULL)) == NULL) {
+	printf("cannot find display in environment, querying...\n");
+	
+	if ((dir = opendir("/tmp/.X11-unix")) == NULL)
+	    die("cannot open display");
+	
+	while ((de = readdir(dir)) != NULL) {
+	    if (de->d_name[0] != 'X')
+                continue;
+	    
+	    snprintf(dpy_name, sizeof dpy_name, ":%s", de->d_name + 1);
+	    if ((dpy = XOpenDisplay(dpy_name)) != NULL) {
+		dpy_name_ptr = (char *) &dpy_name;
+		break;
+	    }
+	}
+
+	if (dpy == NULL)
+	    die("cannot open display");
+    }
+    else
+	dpy_name_ptr = XDisplayName(NULL);
+
+    printf("connected to display %s\n", dpy_name_ptr);
+
+    
     sock_address.sun_family = AF_UNIX;
+    snprintf(socketpath, sizeof socketpath, SOCKET_PATH, dpy_name_ptr);
     if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, "%s", socketpath) == -1)
 	die("could not write the socket path");
     sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -725,8 +757,6 @@ main(int argc, char *argv[])
     
     if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
 	fputs("warning: no locale support\n", stderr);
-    if (!(dpy = XOpenDisplay(NULL)))
-	die("cannot open display");
     screen = DefaultScreen(dpy);
     root = RootWindow(dpy, screen);
     parentwin = root;
@@ -755,8 +785,10 @@ main(int argc, char *argv[])
 	order[i] = &notifs[i];
     }
 
+    
     lines_size = 0;
     configure_x_geom();
+
     
     sem_init(&mut_resume, 0, 1);
     sem_init(&mut_check_socket, 0, 1);

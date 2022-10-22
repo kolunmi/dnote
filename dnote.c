@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -38,7 +39,9 @@ main(int argc, char *argv[]) {
 
     int sock_fd;
     struct sockaddr_un sock_address;
-    char *dispname;
+    char dpy_name[64], *dpy_name_ptr;
+    DIR *dir;
+    struct dirent *de;
     
     len = 0;
     
@@ -116,15 +119,43 @@ main(int argc, char *argv[]) {
 
     
     sock_address.sun_family = AF_UNIX;
-    dispname = XDisplayName(NULL);
-    
-    if (dispname)
-	if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, SOCKET_PATH, dispname) == -1)
-	    die("cannot write the socket path");
     if ((sock_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 	die("failed to create the socket");
-    if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof(sock_address)) == -1)
-	die("failed to connect to the socket");
+    
+    dpy_name_ptr = XDisplayName(NULL);
+    if (dpy_name_ptr[0] != '\0') {
+	if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, SOCKET_PATH, dpy_name_ptr) == -1)
+	    die("cannot write the socket path");
+	if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof(sock_address)) == -1)
+	    die("failed to connect to the socket");
+    }
+    else {
+	printf("cannot find display in environment, searching for socket...\n");
+	
+	if ((dir = opendir("/tmp/.X11-unix")) == NULL)
+	    die("failed to find a socket");
+
+	dpy_name_ptr = NULL;
+	
+	while ((de = readdir(dir)) != NULL) {
+	    if (de->d_name[0] != 'X')
+		continue;
+	    
+	    snprintf(dpy_name, sizeof dpy_name, ":%s", de->d_name + 1);
+	    if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, SOCKET_PATH, dpy_name) == -1)
+		die("cannot write the socket path");
+	    if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof(sock_address)) == -1)
+		continue;
+
+	    dpy_name_ptr = (char *) &dpy_name;
+	    break;
+	}
+
+	if (dpy_name_ptr == NULL)
+	    die("failed to find a socket");
+
+	printf("found socket on display %s\n", dpy_name_ptr);
+    }
 
     
     for (i = 0; fgets(buf, sizeof buf, stdin); i++) {
@@ -137,6 +168,7 @@ main(int argc, char *argv[]) {
 	len = tmplen;
     }
 
+    
     if (send(sock_fd, emit, len, 0) == -1)
 	die("failed to send the data");
 }

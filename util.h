@@ -6,4 +6,3 @@
 
 void die(const char *fmt, ...);
 void *ecalloc(size_t nmemb, size_t size);
-void strfindtrans (char *dest, char *src, char find, size_t *from);
