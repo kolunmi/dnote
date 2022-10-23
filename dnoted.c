@@ -26,8 +26,6 @@
 #include "util.h"
 
 
-#define INTERSECT(x,y,w,h,r)  (MAX(0, MIN((x)+(w),(r).x_org+(r).width)  - MAX((x),(r).x_org)) \
-			       && MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
 #define LENGTH(X)             (sizeof X / sizeof X[0])
 #define TEXTW(X, Y)           (drw_fontset_getwidth((X), (Y)) + lrpad)
 
@@ -52,7 +50,10 @@ typedef struct {
 
 typedef struct {
     
-    int active, visible, selected;
+    int active;
+    int visible;
+    int selected;
+    int draw;
     Window win;
     Drw *drw;
     int wx, wy;
@@ -177,17 +178,18 @@ monitor_x(void *arg)
 		    if (ev.type == Expose) {
 			if (ev.xexpose.window != notifs[i].win)
 			    continue;
-			if (ev.xexpose.count == 0) {
-			    XRaiseWindow(dpy, notifs[i].win);
-			    drw_map(notifs[i].drw, notifs[i].win, 0, 0, notifs[i].mw, notifs[i].mh);
-			}
+			if (ev.xexpose.count != 0)
+			    break;
+			drw_map(notifs[i].drw, notifs[i].win, 0, 0, notifs[i].mw, notifs[i].mh);
 			break;
 		    }
 		    else if (ev.type == VisibilityNotify) {
 			if (ev.xvisibility.window != notifs[i].win)
 			    continue;
-			if (ev.xvisibility.state != VisibilityUnobscured)
-			    XRaiseWindow(dpy, notifs[i].win);
+			if (ev.xvisibility.state == VisibilityUnobscured)
+			    break;
+			XRaiseWindow(dpy, notifs[i].win);
+			XSync(dpy, False);
 			break;
 		    }
 		    else if (ev.type == DestroyNotify) {
@@ -293,15 +295,17 @@ arrange(void)
 	n->wy += xin_y;
 #endif
 
-	XMapRaised(dpy, n->win);
-	XMoveWindow(dpy, n->win, n->wx, n->wy);
+	XMoveResizeWindow(dpy, n->win, n->wx, n->wy, n->mw, n->mh);
     }
 
     for (i = 0; i < MAX_NOTIFICATIONS; i++) {
 	n = order[i];
 	if (!n->active || !n->visible)
 	    continue;
-	
+	XMapRaised(dpy, n->win);
+	if (!n->draw)
+	    continue;
+	n->draw = 0;
 	drw_map(n->drw, n->win, 0, 0, n->mw, n->mh);
     }
     
@@ -415,9 +419,6 @@ draw_contents(Notification *n)
     unsigned int i;
     int y;
 
-    XMapWindow(dpy, n->win);
-
-    drw_resize(n->drw, n->mw, n->mh);
     drw_setscheme(n->drw, scheme[SchemeNorm]);
     drw_rect(n->drw, 0, 0, n->mw, n->mh, 1, 1);
 
@@ -468,8 +469,6 @@ make_geometry(Notification *n)
 
     n->mh = (linecnt + ((n->prof.progress_of) ? 1 : 0)) * bh + contents_padding_vertical * 2;
     n->mw = MIN(MAX(inputw, n->prof.min_width), 8 * monw / 10);
-
-    XResizeWindow(dpy, n->win, n->mw, n->mh);
 }
 
 
@@ -617,6 +616,8 @@ recieve_message(void)
 		t1 = t2;
 	    }
 	}
+	else if (n->active)
+	    n->draw = 1;
 		
 	n->prof = read_prof;
 	make_geometry(n);
@@ -781,7 +782,7 @@ main(int argc, char *argv[])
 
     for (i = 0; i < MAX_NOTIFICATIONS; i++) {
 	create_window(&notifs[i].win);
-	notifs[i].active = notifs[i].visible = notifs[i].selected = 0;
+	notifs[i].active = notifs[i].visible = notifs[i].selected = notifs[i].draw = 0;
 	order[i] = &notifs[i];
     }
 
