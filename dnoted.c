@@ -26,6 +26,8 @@
 #include "util.h"
 
 
+#define INTERSECT(x,y,w,h,r)  (MAX(0, MIN((x)+(w),(r).x_org+(r).width)  - MAX((x),(r).x_org)) \
+			       && MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
 #define LENGTH(X)             (sizeof X / sizeof X[0])
 #define TEXTW(X, Y)           (drw_fontset_getwidth((X), (Y)) + lrpad)
 
@@ -51,7 +53,6 @@ typedef struct {
 typedef struct {
     
     int active, visible, selected;
-    int ignore_expose;
     Window win;
     Drw *drw;
     int wx, wy;
@@ -177,10 +178,6 @@ monitor_x(void *arg)
 			if (ev.xexpose.window != notifs[i].win)
 			    continue;
 			if (ev.xexpose.count == 0) {
-			    if (notifs[i].ignore_expose) {
-				notifs[i].ignore_expose = 0;
-				break;
-			    }
 			    XRaiseWindow(dpy, notifs[i].win);
 			    drw_map(notifs[i].drw, notifs[i].win, 0, 0, notifs[i].mw, notifs[i].mh);
 			}
@@ -296,15 +293,19 @@ arrange(void)
 	n->wy += xin_y;
 #endif
 
-	XMoveResizeWindow(dpy, n->win, n->wx, n->wy, n->mw, n->mh);
+	XMapRaised(dpy, n->win);
+	XMoveWindow(dpy, n->win, n->wx, n->wy);
     }
 
     for (i = 0; i < MAX_NOTIFICATIONS; i++) {
-	if (!notifs[i].active || !notifs[i].visible)
+	n = order[i];
+	if (!n->active || !n->visible)
 	    continue;
-	XMapRaised(dpy, notifs[i].win);
-	drw_map(notifs[i].drw, notifs[i].win, 0, 0, notifs[i].mw, notifs[i].mh);
+	
+	drw_map(n->drw, n->win, 0, 0, n->mw, n->mh);
     }
+    
+    XSync(dpy, False);
 }
 
 
@@ -316,6 +317,7 @@ cancel_inactive(void)
     for (i = 0; i < MAX_NOTIFICATIONS; i++)
 	if (notifs[i].active && !notifs[i].visible) {
 	    notifs[i].active = 0;
+	    
 	    notifs[i].elapsed = 0;
 	    
 	    if (notifs[i].selected && notifs[i].prof.cmd[0] != '\0') {
@@ -328,8 +330,6 @@ cancel_inactive(void)
 	    
 	    XUnmapWindow(dpy, notifs[i].win);
 	}
-
-    XSync(dpy, False);
 }
 
 
@@ -415,6 +415,8 @@ draw_contents(Notification *n)
     unsigned int i;
     int y;
 
+    XMapWindow(dpy, n->win);
+
     drw_resize(n->drw, n->mw, n->mh);
     drw_setscheme(n->drw, scheme[SchemeNorm]);
     drw_rect(n->drw, 0, 0, n->mw, n->mh, 1, 1);
@@ -466,6 +468,8 @@ make_geometry(Notification *n)
 
     n->mh = (linecnt + ((n->prof.progress_of) ? 1 : 0)) * bh + contents_padding_vertical * 2;
     n->mw = MIN(MAX(inputw, n->prof.min_width), 8 * monw / 10);
+
+    XResizeWindow(dpy, n->win, n->mw, n->mh);
 }
 
 
@@ -584,6 +588,7 @@ recieve_message(void)
 			&& !strcmp(notifs[i].prof.id, read_prof.id)) {
 			n = &notifs[i];
 			n->elapsed = 0;
+			n->active = 1;
 			break;
 		    }
 		}
@@ -591,7 +596,6 @@ recieve_message(void)
 	    for (i = 0; i < MAX_NOTIFICATIONS; i++)
 		if (!notifs[i].active) {
 		    n = &notifs[i];
-		    n->ignore_expose = 1;
 		    break;
 		}
 	if (n == NULL) {
@@ -602,9 +606,8 @@ recieve_message(void)
 	if (n != order[0]) {
 	    t1 = order[0];
 	    order[0] = n;
-
+		
 	    for (i = 1; i < MAX_NOTIFICATIONS; i++) {
-		t1->ignore_expose = 1;
 		if (order[i] == n) {
 		    order[i] = t1;
 		    break;
@@ -741,8 +744,7 @@ main(int argc, char *argv[])
     snprintf(socketpath, sizeof socketpath, SOCKET_PATH, dpy_name_ptr);
     if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, "%s", socketpath) == -1)
 	die("could not write the socket path");
-    if ((sock_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
-	die("failed to create the socket");
+    sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof sock_address) == 0)
 	die("socket is already being hosted");
     unlink(socketpath);
@@ -779,7 +781,7 @@ main(int argc, char *argv[])
 
     for (i = 0; i < MAX_NOTIFICATIONS; i++) {
 	create_window(&notifs[i].win);
-	notifs[i].active = notifs[i].visible = notifs[i].selected = notifs[i].ignore_expose = 0;
+	notifs[i].active = notifs[i].visible = notifs[i].selected = 0;
 	order[i] = &notifs[i];
     }
 
