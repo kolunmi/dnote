@@ -5,7 +5,7 @@ CCFLAGS  = $(CFLAGS)
 CLDFLAGS = -L/usr/X11R6/lib -lX11 $(LDFLAGS)
 
 DCFLAGS  = $(CCFLAGS) -I/usr/X11R6/include -DXINERAMA -I/usr/include/freetype2
-DLDFLAGS = $(CLDFLAGS) -lXinerama -lfontconfig -lXft -lpthread -lrt
+DLDFLAGS = $(CLDFLAGS) -lXinerama -lfontconfig -lXft -lpthread -lrt -lpng
 
 PREFIX = /usr/local
 
@@ -16,7 +16,7 @@ all: dnote dnoted
 dnote: dnote.c util.c
 	$(CC) -o $@ $(CCFLAGS) $(CLDFLAGS) $^
 
-dnoted: dnoted.c util.c drw.c
+dnoted: dnoted.c util.c drw.c image.c
 	$(CC) -o $@ $(DCFLAGS) $(DLDFLAGS) $^
 
 install: all

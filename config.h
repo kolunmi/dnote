@@ -1,4 +1,5 @@
 #define MAX_NOTIFICATIONS 10
+#define MAX_IMAGE_MEM 5 /* max number of recent images to keep in memory */
 
 static const unsigned int def_expire = 10;                /* seconds until window disapears */
 static const unsigned int def_min_width = 100;            /* minimum window width */

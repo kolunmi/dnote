@@ -56,3 +56,8 @@ int drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned in
 
 /* Map functions */
 void drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h);
+
+/* Image functions */
+#include "image.h"
+
+void drw_png(Drw *drw, PngImage *img, int x, int y);

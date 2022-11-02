@@ -45,8 +45,16 @@ typedef struct {
     unsigned int location;
     unsigned int progress_val, progress_of;
     char cmd[MAX_SHCMD_LEN];
+    int inline_image;
     
 } Profile;
+
+typedef struct {
+
+    PngImage img;
+    char path[MAX_PATH_LEN];
+    
+} PngFile;
 
 typedef struct {
     
@@ -81,7 +89,7 @@ void set_defaults(void);
 void usage(void);
 
 
-static char socketpath[256];
+static char socketpath[MAX_PATH_LEN];
 static int sock_fd, cli_fd;
 
 static Display *dpy;
@@ -112,6 +120,10 @@ static size_t lines_size;
 static unsigned int linecnt;
 static unsigned int max_lines;
 
+static char *image_path_request;
+static PngFile image_files[MAX_IMAGE_MEM];
+static PngFile *image_file_ring[MAX_IMAGE_MEM];
+static PngImage *cur_image;
 
 void *
 count_down(void *arg)
@@ -172,7 +184,7 @@ monitor_x(void *arg)
 	    }
 	    else
 		for (i = 0; i < MAX_NOTIFICATIONS; i++) {
-		    if (!notifs[i].active)
+		    if (!notifs[i].active || !notifs[i].visible)
 			continue;
 
 		    if (ev.type == Expose) {
@@ -321,15 +333,15 @@ cancel_inactive(void)
     for (i = 0; i < MAX_NOTIFICATIONS; i++)
 	if (notifs[i].active && !notifs[i].visible) {
 	    notifs[i].active = 0;
-	    
-	    notifs[i].elapsed = 0;
+	    notifs[i].elapsed = 0.0;
 	    
 	    if (notifs[i].selected && notifs[i].prof.cmd[0] != '\0') {
+		notifs[i].selected = 0;
+		report(0, TITLE_COMMAND, "executing '%s'", notifs[i].prof.cmd);
 		if (fork() == 0) {
 		    execl("/bin/sh", "sh", "-c", notifs[i].prof.cmd, NULL);
 		    exit(EXIT_SUCCESS);
 		}
-		notifs[i].selected = 0;
 	    }
 	    
 	    XUnmapWindow(dpy, notifs[i].win);
@@ -370,6 +382,8 @@ configure_x_geom(void)
 	monh = info[0].height;
 
 	XFree(info);
+
+	report(0, TITLE_STATUS, "geometry configured: %ix%i+%i+%i", monw, monh, xin_x, xin_y);
     }
     else
 #endif
@@ -379,6 +393,8 @@ configure_x_geom(void)
 
 	monw = wa.width;
 	monh = wa.height;
+
+	report(0, TITLE_STATUS, "geometry configured: %ix%i+0+0", monw, monh);
     }
 
     tmp = monh - contents_padding_vertical * 2;
@@ -417,25 +433,60 @@ void
 draw_contents(Notification *n)
 {
     unsigned int i;
-    int y;
+    int x, y, ry;
 
     drw_setscheme(n->drw, scheme[SchemeNorm]);
     drw_rect(n->drw, 0, 0, n->mw, n->mh, 1, 1);
-
     y = contents_padding_vertical;
 
-    for (i = 0; i < linecnt; i++) {
-	drw_text(n->drw, n->prof.center_text ? (n->mw - TEXTW(n->drw, lines[i]))/2 : 0, y, n->mw, bh, lrpad / 2, lines[i], 0);
-	y += bh;
-    }
+    if (cur_image != NULL) {
+	if (n->prof.inline_image) {
+	    drw_png(n->drw, cur_image, 0, y);
 
+	    if (linecnt * bh < cur_image->h)
+		ry = cur_image->h / 2 - linecnt * bh / 2;
+	    else
+		ry = 0;
+	    
+	    for (i = 0; i < linecnt; i++) {
+		if (ry < cur_image->h) {
+		    x = cur_image->w;
+		    if (n->prof.center_text)
+			x += (n->mw - cur_image->w - TEXTW(n->drw, lines[i]))/2;
+		}
+		else
+		    x = n->prof.center_text ? (n->mw - TEXTW(n->drw, lines[i]))/2 : 0;
+	    
+		drw_text(n->drw, x, y + ry, n->mw, bh, lrpad / 2, lines[i], 0);
+		ry += bh;
+	    }
+	    
+	    if (ry < cur_image->h)
+		ry = cur_image->h;
+
+	    y += ry;
+	}
+	else {
+	    drw_png(n->drw, cur_image, (n->mw - cur_image->w)/2, y);
+	    y += cur_image->h;
+	}
+    }
+    
+    if (cur_image == NULL || !n->prof.inline_image)
+	for (i = 0; i < linecnt; i++) {
+	    drw_text(n->drw, n->prof.center_text ? (n->mw - TEXTW(n->drw, lines[i]))/2 : 0,
+		     y, n->mw, bh, lrpad / 2, lines[i], 0);
+	    y += bh;
+	}
+
+    
     if (n->prof.progress_of) {
 	drw_setscheme(n->drw, scheme[SchemeBar]);
-		
-	if (bar_outer_padding + bar_inner_padding >= bh / 2
-	    || bar_outer_padding + bar_inner_padding >= n->mw / 2)
-	    bar_outer_padding = bar_inner_padding = 0;
 
+//	if (bar_outer_padding + bar_inner_padding >= bh / 2
+//	    || bar_outer_padding + bar_inner_padding >= n->mw / 2)
+//	    bar_outer_padding = bar_inner_padding = 0;
+	
 	drw_rect(n->drw,
 		 bar_outer_padding,
 		 y + bar_outer_padding,
@@ -458,17 +509,45 @@ void
 make_geometry(Notification *n)
 {
     unsigned int i, inputw, tmpmax;
-    
+    int y;
+
+    n->mh = contents_padding_vertical * 2;
+    if (n->prof.progress_of)
+	n->mh += bh;
+
     inputw = tmpmax = 0;
     
-    for (i = 0; i < linecnt; i++) {
-	tmpmax = TEXTW(n->drw, lines[i]);
-	if (tmpmax > inputw)
-	    inputw = tmpmax;
+    if (cur_image == NULL || !n->prof.inline_image) {
+	for (i = 0; i < linecnt; i++) {
+	    tmpmax = TEXTW(n->drw, lines[i]);
+	    if (tmpmax > inputw)
+		inputw = tmpmax;
+	}
+	
+	n->mh += linecnt * bh;
+    }
+    else {
+	for (y = 0, i = 0; i < linecnt; i++) {
+	    tmpmax = TEXTW(n->drw, lines[i]);
+	    if (y < cur_image->h)
+		tmpmax += cur_image->w;
+	    y += bh;
+
+	    if (tmpmax > inputw)
+		inputw = tmpmax;
+	}
+
+	if (y < cur_image->h)
+	    y = cur_image->h;
+	n->mh += y;
     }
 
-    n->mh = (linecnt + ((n->prof.progress_of) ? 1 : 0)) * bh + contents_padding_vertical * 2;
-    n->mw = MIN(MAX(inputw, n->prof.min_width), 8 * monw / 10);
+    if (cur_image == NULL || n->prof.inline_image)
+	n->mw = MIN(MAX(inputw, n->prof.min_width), 9 * monw / 10);
+    else {
+	n->mw = MIN(MAX(MAX(inputw, cur_image->w), n->prof.min_width), 9 * monw / 10);
+	n->mh += cur_image->h;
+    }
 }
 
 
@@ -489,19 +568,27 @@ read_message(void)
 		optblk = 0;
 		j = i + 1;
 		break;
-	    case 'c':
+	    case OPTION_JUSTIFY_CENTER:
 		i++;
 		read_prof.center_text = 1;
 		break;
-	    case 'n':
+	    case OPTION_JUSTIFY_LEFT:
 		i++;
 		read_prof.center_text = 0;
 		break;
-	    case 'z':
+	    case OPTION_NO_EXPIRE:
 		i++;
 		read_prof.expire = 0;
 		break;
-	    case 'p':
+	    case OPTION_INLINE_IMAGE:
+		i++;
+		read_prof.inline_image = 1;
+		break;
+	    case OPTION_HEADER_IMAGE:
+		i++;
+		read_prof.inline_image = 0;
+		break;
+	    case OPTION_PROGRESS_BAR:
 		i++;
 		if ((p = strchr(msg + i, '/')))
 		    *p = '\0';
@@ -510,29 +597,34 @@ read_message(void)
 		read_prof.progress_of = atoi(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case 's':
+	    case OPTION_SHELL_COMMAND:
 		i++;
 		strncpy(read_prof.cmd, msg + i, sizeof read_prof.cmd);
 		i += strlen(msg + i);
 		break;
-	    case 'e':
+	    case OPTION_EXPIRE:
 		i++;
 		read_prof.expire = atof(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case 'w':
+	    case OPTION_MIN_WIDTH:
 		i++;
 		read_prof.min_width = atoi(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case 'l':
+	    case OPTION_LOCATION:
 		i++;
 		read_prof.location = atoi(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case 'i':
+	    case OPTION_ID:
 		i++;
 		strncpy(read_prof.id, msg + i, sizeof read_prof.id);
+		i += strlen(msg + i);
+		break;
+	    case OPTION_IMAGE_PATH:
+		i++;
+		image_path_request = msg + i;
 		i += strlen(msg + i);
 		break;
 	    }
@@ -545,7 +637,7 @@ read_message(void)
 		break;
 	    if (linecnt >= max_lines)
 		break;
-	    if (msg[i] == '\0') // || msg[i + 1] == '\0')
+	    if (msg[i] == '\0')
 		break;
 	}
     }
@@ -559,8 +651,10 @@ read_message(void)
 void
 recieve_message(void)
 {
-    unsigned int i;
-    Notification *n, *t1, *t2;
+    unsigned int i, j;
+    Notification *n;
+    PngFile *pf;
+    PngImage *img;
 	    
     if (cli_fd == -1) {
 	cleanup();
@@ -578,54 +672,79 @@ recieve_message(void)
 		break;
 	} else
 	    break;
-
+	
 	n = NULL;
 	if (read_prof.id[0] != '\0')
-	    for (i = 0; i < MAX_NOTIFICATIONS; i++)
-		if (notifs[i].active) {
-		    if (notifs[i].prof.id[0] != '\0'
-			&& !strcmp(notifs[i].prof.id, read_prof.id)) {
-			n = &notifs[i];
-			n->elapsed = 0;
-			n->active = 1;
-			break;
-		    }
+	    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+		if (!order[i]->active)
+		    break;
+		if (order[i]->prof.id[0] != '\0'
+		    && !strcmp(order[i]->prof.id, read_prof.id)) {
+		    n = order[i];
+		    n->elapsed = 0;
+		    n->active = 1;
+		    break;
 		}
+	    }
 	if (n == NULL)
 	    for (i = 0; i < MAX_NOTIFICATIONS; i++)
-		if (!notifs[i].active) {
-		    n = &notifs[i];
+		if (!order[i]->active) {
+		    n = order[i];
 		    break;
 		}
 	if (n == NULL) {
-	    fputs("request rejected: too many notifications\n", stderr);
+	    report(1, TITLE_WARNING, "request rejected: too many notifications");
 	    break;
 	}
 
-	if (n != order[0]) {
-	    t1 = order[0];
-	    order[0] = n;
-		
-	    for (i = 1; i < MAX_NOTIFICATIONS; i++) {
-		if (order[i] == n) {
-		    order[i] = t1;
-		    break;
-		}
-		t2 = order[i];
-		order[i] = t1;
-		t1 = t2;
+	if (i != 0) {
+	    for (j = 0; j < i; j++) {
+		n = order[j];
+		order[j] = order[i];
+		order[i] = n;
 	    }
+	    n = order[0];
 	}
 	else if (n->active)
 	    n->draw = 1;
-		
+
+
+	cur_image = NULL;
+	if (image_path_request != NULL) {
+
+	    for (i = 0; i < MAX_IMAGE_MEM; i++) {
+		if (image_file_ring[i]->path[0] == '\0')
+		    break;
+		if (!strcmp(image_file_ring[i]->path, image_path_request)) {
+		    cur_image = &image_file_ring[i]->img;
+		    break;
+		}
+	    }
+	    
+	    if (cur_image == NULL) {
+		i = MAX_IMAGE_MEM - 1;
+		if ((cur_image = read_png_to_image(&image_file_ring[i]->img, image_path_request)) != NULL) {
+		    strncpy(image_file_ring[i]->path, image_path_request, sizeof image_file_ring[i]->path);
+		    report(0, TITLE_STATUS, "loaded new image '%s' into memory", image_path_request);
+		}
+		else
+		    report(1, TITLE_WARNING, "could not read image file '%s'", image_path_request);
+	    }
+
+            if (cur_image != NULL)
+		for (j = 0; j < i; j++) {
+		    pf = image_file_ring[j];
+		    image_file_ring[j] = image_file_ring[i];
+		    image_file_ring[i] = pf;
+		}
+	}
+	    
 	n->prof = read_prof;
 	make_geometry(n);
 	draw_contents(n);
 
-	n->active = 1;
-	n->visible = 1;
-		
+	n->active = n->visible = 1;
+
 	break;
     }
 }
@@ -680,7 +799,9 @@ set_defaults(void)
     read_prof.min_width = def_min_width;
     read_prof.center_text = def_center_text;
     read_prof.location = def_location;
+    read_prof.inline_image = 0;
     read_prof.progress_of = 0;
+    image_path_request = NULL;
 }
 
 
@@ -703,7 +824,6 @@ main(int argc, char *argv[])
     XWindowAttributes wa;
     struct sockaddr_un sock_address;
 
-    
     if (argc >= 2) {
 	if (!strcmp(argv[1], "-v")) {
 	    puts("dnoted-"VERSION);
@@ -716,10 +836,10 @@ main(int argc, char *argv[])
 
     
     if ((dpy = XOpenDisplay(NULL)) == NULL) {
-	printf("cannot find display in environment, querying...\n");
+	report(0, TITLE_STATUS, "cannot find display in environment, searching");
 	
-	if ((dir = opendir("/tmp/.X11-unix")) == NULL)
-	    die("cannot open display");
+	if ((dir = opendir(X_DISPLAY_DIR)) == NULL)
+	    die("could not open display");
 	
 	while ((de = readdir(dir)) != NULL) {
 	    if (de->d_name[0] != 'X')
@@ -733,42 +853,42 @@ main(int argc, char *argv[])
 	}
 
 	if (dpy == NULL)
-	    die("cannot open display");
+	    die("could not open display");
     }
     else
 	dpy_name_ptr = XDisplayName(NULL);
 
-    printf("connected to display %s\n", dpy_name_ptr);
+    report(0, TITLE_STATUS, "connected to display %s", dpy_name_ptr);
 
-    
     sock_address.sun_family = AF_UNIX;
     snprintf(socketpath, sizeof socketpath, SOCKET_PATH, dpy_name_ptr);
     if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, "%s", socketpath) == -1)
 	die("could not write the socket path");
-    sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if ((sock_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+	die("could not create the socket");
     if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof sock_address) == 0)
 	die("socket is already being hosted");
     unlink(socketpath);
     if (bind(sock_fd, (struct sockaddr *) &sock_address, sizeof sock_address) == -1)
 	die("could not bind a name to the socket");
-    if (listen(sock_fd, SOMAXCONN) < 0)
+    if (listen(sock_fd, SOMAXCONN) == -1)
 	die("could not listen to the socket");
     fcntl(sock_fd, F_SETFD, FD_CLOEXEC | fcntl(sock_fd, F_GETFD));
 
+    report(0, TITLE_STATUS, "hosting socket on %s", socketpath);
     
     if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
-	fputs("warning: no locale support\n", stderr);
+	report(1, TITLE_WARNING, "no locale support", stderr);
     screen = DefaultScreen(dpy);
     root = RootWindow(dpy, screen);
     parentwin = root;
     if (!XGetWindowAttributes(dpy, parentwin, &wa))
-	die("could not get embedding window attributes: 0x%lx",
-	    parentwin);
+	die("could not get embedding window attributes: 0x%lx", parentwin);
     XSelectInput(dpy, root, StructureNotifyMask);
 
     notifs[0].drw = drw_create(dpy, screen, root, wa.width, wa.height);
     if (!drw_fontset_create(notifs[0].drw, fonts, LENGTH(fonts)))
-	die("no fonts could be loaded.");
+	die("no fonts could be loaded");
     for (i = 0; i < SchemeLast; i++)
 	scheme[i] = drw_scm_create(notifs[0].drw, colors[i], 2);
     
@@ -786,11 +906,16 @@ main(int argc, char *argv[])
 	order[i] = &notifs[i];
     }
 
+    for (i = 0; i < MAX_IMAGE_MEM; i++) {
+	image_files[i].img.rows = NULL;
+	image_files[i].img.w = image_files[i].img.h = 0;
+	image_files[i].path[0] = '\0';
+	image_file_ring[i] = &image_files[i];
+    }
     
     lines_size = 0;
     configure_x_geom();
 
-    
     sem_init(&mut_resume, 0, 1);
     sem_init(&mut_check_socket, 0, 1);
     sem_init(&mut_check_x, 0, 1);

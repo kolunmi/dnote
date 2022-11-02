@@ -21,6 +21,9 @@ usage(void) {
 	  "	-loc [0-8]		window location option\n"
 	  "	-pbar [val] [out of]	construct a progress bar\n"
 	  "	-cmd [command]		run shell command when window is clicked\n"
+	  "	-img [filepath]		render png to window\n"
+	  "	-img-header		position png at top of window\n"
+	  "	-img-inline		position png next to text\n"
 	  "	-v			print version info\n"
 	  "	-h			print this help text\n"
 	  , stderr);
@@ -52,10 +55,16 @@ main(int argc, char *argv[]) {
 	    exit(0);
 	}
 	else if (!strcmp(argv[i], "-c")) {
-	    strcpy(buf, "c");
+	    snprintf(buf, sizeof buf, "%c", OPTION_JUSTIFY_CENTER);
 	}
 	else if (!strcmp(argv[i], "-nc")) {
-	    strcpy(buf, "n");
+	    snprintf(buf, sizeof buf, "%c", OPTION_JUSTIFY_LEFT);
+	}
+	else if (!strcmp(argv[i], "-img-header")) {
+	    snprintf(buf, sizeof buf, "%c", OPTION_HEADER_IMAGE);
+	}
+	else if (!strcmp(argv[i], "-img-inline")) {
+	    snprintf(buf, sizeof buf, "%c", OPTION_INLINE_IMAGE);
 	}
 	else if (i + 1 == argc) {
 	    usage();
@@ -63,20 +72,20 @@ main(int argc, char *argv[]) {
 	/* these options take 1 argument */
 	else if (!strcmp(argv[i], "-minw")) {
 	    tmp1 = atoi(argv[++i]);
-	    snprintf(buf, sizeof buf, "w%i", tmp1);
+	    snprintf(buf, sizeof buf, "%c%i", OPTION_MIN_WIDTH, tmp1);
 	}
 	else if (!strcmp(argv[i], "-exp")) {
 	    tmpf = atof(argv[++i]);
 	    if (tmpf)
-		snprintf(buf, sizeof buf, "e%f", tmpf);
+		snprintf(buf, sizeof buf, "%c%f", OPTION_EXPIRE, tmpf);
 	    else
-		strcpy(buf, "z");
+		snprintf(buf, sizeof buf, "%c", OPTION_NO_EXPIRE);
 	}
 	else if (!strcmp(argv[i], "-loc")) {
 	    tmp1 = atoi(argv[++i]);
 	    if (tmp1 > 8)
 		die("-loc : invalid location specifier");
-	    snprintf(buf, sizeof buf, "l%i", tmp1);
+	    snprintf(buf, sizeof buf, "%c%i", OPTION_LOCATION, tmp1);
 	}
 	else if (!strcmp(argv[i], "-id")) {
 	    i++;
@@ -85,10 +94,15 @@ main(int argc, char *argv[]) {
 		argv[i][MAX_ID_LEN - 1] = '\0';
 		tmp1 = MAX_ID_LEN;
 	    }
-	    snprintf(buf, sizeof buf, "i%s", argv[i]);
+	    snprintf(buf, sizeof buf, "%c%s", OPTION_ID, argv[i]);
 	}
 	else if (!strcmp(argv[i], "-cmd")) {
-	    snprintf(buf, MAX_SHCMD_LEN, "s%s", argv[++i]);
+	    snprintf(buf, MAX_SHCMD_LEN, "%c%s", OPTION_SHELL_COMMAND, argv[++i]);
+	}
+	else if (!strcmp(argv[i], "-img")) {
+	    buf[0] = OPTION_IMAGE_PATH;
+	    if (realpath(argv[++i], buf + 1) == NULL)
+		die("-img : could not find file");
 	}
 	else if (i + 2 >= argc) {
 	    usage();
@@ -99,7 +113,7 @@ main(int argc, char *argv[]) {
 	    tmp2 = atoi(argv[++i]);
 	    if (!tmp2 || tmp1 > tmp2)
 		die("-pbar : invalid arguments");
-	    snprintf(buf, sizeof buf, "p%i/%i", tmp1, tmp2); 
+	    snprintf(buf, sizeof buf, "%c%i/%i", OPTION_PROGRESS_BAR, tmp1, tmp2); 
 	}
 	else
 	    usage();
@@ -120,20 +134,20 @@ main(int argc, char *argv[]) {
     
     sock_address.sun_family = AF_UNIX;
     if ((sock_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
-	die("failed to create the socket");
+	die("could not create the socket");
     
     dpy_name_ptr = XDisplayName(NULL);
     if (dpy_name_ptr[0] != '\0') {
 	if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, SOCKET_PATH, dpy_name_ptr) == -1)
-	    die("cannot write the socket path");
+	    die("could not write the socket path");
 	if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof(sock_address)) == -1)
-	    die("failed to connect to the socket");
+	    die("could not to connect to the socket");
     }
     else {
-	printf("cannot find display in environment, searching for socket...\n");
+	report(0, TITLE_STATUS, "could not find display in environment, searching for socket");
 	
-	if ((dir = opendir("/tmp/.X11-unix")) == NULL)
-	    die("failed to find a socket");
+	if ((dir = opendir(X_DISPLAY_DIR)) == NULL)
+	    die("could not find a socket");
 
 	dpy_name_ptr = NULL;
 	
@@ -143,7 +157,7 @@ main(int argc, char *argv[]) {
 	    
 	    snprintf(dpy_name, sizeof dpy_name, ":%s", de->d_name + 1);
 	    if (snprintf(sock_address.sun_path, sizeof sock_address.sun_path, SOCKET_PATH, dpy_name) == -1)
-		die("cannot write the socket path");
+		die("could not write the socket path");
 	    if (connect(sock_fd, (struct sockaddr *) &sock_address, sizeof(sock_address)) == -1)
 		continue;
 
@@ -152,16 +166,16 @@ main(int argc, char *argv[]) {
 	}
 
 	if (dpy_name_ptr == NULL)
-	    die("failed to find a socket");
+	    die("could not find a socket");
 
-	printf("found socket on display %s\n", dpy_name_ptr);
+	report(0, TITLE_STATUS, "found socket on display %s", dpy_name_ptr);
     }
 
     
     for (i = 0; fgets(buf, sizeof buf, stdin); i++) {
 	tmplen = len + strlen(buf);
 	if (tmplen >= MESSAGE_SIZE) {
-	    fputs("warning: message exceeds max size; trimming\n", stderr);
+	    report(1, TITLE_WARNING, "message exceeds max size, truncating");
 	    break;
 	}
 	strcpy(emit + len, buf);

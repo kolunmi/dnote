@@ -1,4 +1,6 @@
 /* See LICENSE file for copyright and license details. */
+#include <X11/X.h>
+#include <X11/Xutil.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -461,4 +463,44 @@ drw_cur_free(Drw *drw, Cur *cursor)
 
     XFreeCursor(drw->dpy, cursor->cursor);
     free(cursor);
+}
+
+void
+drw_png(Drw *drw, PngImage *img, int x, int y)
+{
+    unsigned int tx, ty;
+    png_bytep px;
+    unsigned char br, bg, bb;
+    unsigned char cr, cg, cb;
+    float a;
+    XImage *ximg;
+    
+    if (!drw || !img)
+	return;
+
+    ximg = XGetImage(drw->dpy, drw->drawable, x, y, img->w, img->h, AllPlanes, ZPixmap);
+
+    br = (drw->scheme[ColBg].pixel >> 16) & 0xFF;
+    bg = (drw->scheme[ColBg].pixel >> 8) & 0xFF;
+    bb = (drw->scheme[ColBg].pixel >> 0) & 0xFF;
+
+    for (ty = 0; ty < img->h; ty++)
+	for (tx = 0; tx < img->w; tx++) {
+	    px = &img->rows[ty][tx * 4];
+
+	    if (px[3] == 255)
+		XPutPixel(ximg, tx, ty, 65536 * px[0] + 256 * px[1] + px[2]);
+	    else if (px[3] == 0)
+		XPutPixel(ximg, tx, ty, drw->scheme[ColBg].pixel);
+	    else {
+		a = px[3] / 255.0;
+		cr = ((1.0 - a) * br + a * px[0]);
+		cg = ((1.0 - a) * bg + a * px[1]);
+		cb = ((1.0 - a) * bb + a * px[2]);
+		XPutPixel(ximg, tx, ty, 65536 * cr + 256 * cg + cb);
+	    }
+	}
+
+    XPutImage(drw->dpy, drw->drawable, drw->gc, ximg, 0, 0, x, y, img->w, img->h);
+    XDestroyImage(ximg);
 }
