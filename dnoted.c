@@ -878,7 +878,7 @@ main(int argc, char *argv[])
     report(0, TITLE_STATUS, "hosting socket on %s", socketpath);
     
     if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
-	report(1, TITLE_WARNING, "no locale support", stderr);
+	report(1, TITLE_WARNING, "no locale support");
     screen = DefaultScreen(dpy);
     root = RootWindow(dpy, screen);
     parentwin = root;
