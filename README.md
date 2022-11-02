@@ -3,8 +3,7 @@
 ![screenshot](/screenshot.png "screenshot")
 
 ## Introduction
-Dnote is a notification utility for X based on dmenu. It is suitable for handling requests in quick succession and allows for the construction of a progress bar, making it ideal for volume indicators, etc.
-
+Dnote is a notification utility for X based on dmenu.
 Configuration is done by editing `config.h`.
 
 ## Installation
@@ -20,7 +19,7 @@ make install
 dnoted &
 
 # create a notification with a window at least 200 pixels wide
-echo message | dnote -minw 200
+echo "$MESSAGE" | dnote -minw 200
 
 # control the location and time until expiration
 echo top right | dnote -loc 4 -exp 15
@@ -33,4 +32,7 @@ for i in {0..10}; do
 	echo $i out of 10 | dnote -id abc -pbar $i 10
 	sleep 0.1
 done
+
+# render a png to the notification
+echo "$MESSAGE" | dnote -img './image.png' -img-inline
 ```
