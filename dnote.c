@@ -7,20 +7,23 @@
 #include "util.h"
 #include "client.h"
 
+
 void
 usage(void) {
     fputs("usage: dnote [OPTS]\n"
 	  "	-id [string]		asscociate message with id\n"
-	  "	-exp [seconds]		time until expiration\n"
+	  "	-exp [seconds]		time until expiration; '0' will never expire\n"
 	  "	-minw [pixels]		minimum window width\n"
-	  "	-c			center text\n"
-	  "	-nc			don't center text\n"
-	  "	-loc [0-8]		window location option\n"
+	  "	-center			center text\n"
+	  "	-no-center		don't center text\n"
+	  "	-loc [0-8]		window location\n"
+	  "	-ploc [x] [y]		specify precise location, relative to geometry origin\n"
 	  "	-pbar [val] [out of]	construct a progress bar\n"
-	  "	-cmd [command]		run shell command when window is clicked\n"
+	  "	-cmd [command]		run shell command when window is selected\n"
 	  "	-img [filepath]		render png to window\n"
 	  "	-img-header		position png at top of window\n"
 	  "	-img-inline		position png next to text\n"
+	  "	-imut			remove ability to kill notification by clicking\n"
 	  "	-v			print version info\n"
 	  "	-h			print this help text\n"
 	  , stderr);
@@ -34,8 +37,9 @@ main(int argc, char *argv[]) {
     char emit[MESSAGE_SIZE];
     char buf[BUFSIZ];
     size_t len, tmplen;
-    unsigned int tmp1, tmp2;
-    float tmpf;
+    int itmp1, itmp2;
+    unsigned int uitmp1, uitmp2;
+    float ftmp;
     int sock_fd;
 
     emit[0] = DNOTE_PREFIX;
@@ -47,10 +51,10 @@ main(int argc, char *argv[]) {
 	    puts("dnote-"VERSION);
 	    exit(0);
 	}
-	else if (!strcmp(argv[i], "-c")) {
+	else if (!strcmp(argv[i], "-center")) {
 	    snprintf(buf, sizeof buf, "%c", DNOTE_OPTION_JUSTIFY_CENTER);
 	}
-	else if (!strcmp(argv[i], "-nc")) {
+	else if (!strcmp(argv[i], "-no-center")) {
 	    snprintf(buf, sizeof buf, "%c", DNOTE_OPTION_JUSTIFY_LEFT);
 	}
 	else if (!strcmp(argv[i], "-img-header")) {
@@ -59,26 +63,29 @@ main(int argc, char *argv[]) {
 	else if (!strcmp(argv[i], "-img-inline")) {
 	    snprintf(buf, sizeof buf, "%c", DNOTE_OPTION_INLINE_IMAGE);
 	}
+	else if (!strcmp(argv[i], "-imut")) {
+	    snprintf(buf, sizeof buf, "%c", DNOTE_OPTION_IMMUTABLE);
+	}
 	else if (i + 1 == argc) {
 	    usage();
 	}
 	/* these options take 1 argument */
 	else if (!strcmp(argv[i], "-minw")) {
-	    tmp1 = atoi(argv[++i]);
-	    snprintf(buf, sizeof buf, "%c%i", DNOTE_OPTION_MIN_WIDTH, tmp1);
+	    uitmp1 = atoi(argv[++i]);
+	    snprintf(buf, sizeof buf, "%c%i", DNOTE_OPTION_MIN_WIDTH, uitmp1);
 	}
 	else if (!strcmp(argv[i], "-exp")) {
-	    tmpf = atof(argv[++i]);
-	    if (tmpf)
-		snprintf(buf, sizeof buf, "%c%f", DNOTE_OPTION_EXPIRE, tmpf);
+	    ftmp = atof(argv[++i]);
+	    if (ftmp)
+		snprintf(buf, sizeof buf, "%c%f", DNOTE_OPTION_EXPIRE, ftmp);
 	    else
 		snprintf(buf, sizeof buf, "%c", DNOTE_OPTION_NO_EXPIRE);
 	}
 	else if (!strcmp(argv[i], "-loc")) {
-	    tmp1 = atoi(argv[++i]);
-	    if (tmp1 > 8)
+	    uitmp1 = atoi(argv[++i]);
+	    if (uitmp1 > 8)
 		die("-loc : invalid location specifier");
-	    snprintf(buf, sizeof buf, "%c%i", DNOTE_OPTION_LOCATION, tmp1);
+	    snprintf(buf, sizeof buf, "%c%i", DNOTE_OPTION_LOCATION, uitmp1);
 	}
 	else if (!strcmp(argv[i], "-id")) {
 	    snprintf(buf, MAX_ID_LEN + 1, "%c%s", DNOTE_OPTION_ID, argv[++i]);
@@ -96,11 +103,16 @@ main(int argc, char *argv[]) {
 	}
 	/* these options take 2 arguments */
 	else if (!strcmp(argv[i], "-pbar")) {
-	    tmp1 = atoi(argv[++i]);
-	    tmp2 = atoi(argv[++i]);
-	    if (!tmp2 || tmp1 > tmp2)
+	    uitmp1 = atoi(argv[++i]);
+	    uitmp2 = atoi(argv[++i]);
+	    if (!uitmp2 || uitmp1 > uitmp2)
 		die("-pbar : invalid arguments");
-	    snprintf(buf, sizeof buf, "%c%i/%i", DNOTE_OPTION_PROGRESS_BAR, tmp1, tmp2); 
+	    snprintf(buf, sizeof buf, "%c%i/%i", DNOTE_OPTION_PROGRESS_BAR, uitmp1, uitmp2); 
+	}
+	else if (!strcmp(argv[i], "-ploc")) {
+	    itmp1 = atoi(argv[++i]);
+	    itmp2 = atoi(argv[++i]);
+	    snprintf(buf, sizeof buf, "%c%i/%i", DNOTE_OPTION_PRECISE_LOCATION, itmp1, itmp2);
 	}
 	else
 	    usage();

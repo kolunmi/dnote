@@ -42,9 +42,12 @@ typedef struct {
     float expire;
     unsigned int min_width;
     unsigned int location;
+    int precise_location;
+    int px, py;
     unsigned int progress_val, progress_of;
     char cmd[MAX_SHCMD_LEN];
     int inline_image;
+    int immutable;
     
 } Profile;
 
@@ -204,7 +207,6 @@ count_down(void *arg)
 		sem_post(&mut_resume);
 	    }
 	}
-
     }
     
     return 0;
@@ -273,6 +275,8 @@ monitor_x(void *arg)
 		    else if (ev.type == ButtonPress) {
 			if (ev.xbutton.window != notifs[i].win)
 			    continue;
+			if (notifs[i].prof.immutable)
+			    break;
 			if (ev.xbutton.button == Button1)
 			    notifs[i].selected = 1;
 			else if (ev.xbutton.button != Button3)
@@ -312,54 +316,60 @@ arrange(void)
 	if (!n->active || !n->visible)
 	    continue;
 
-	switch (n->prof.location) {
-	case 0:
-	    n->wx = (monw - n->mw) / 2;
-	    n->wy = (monh - n->mh) / 2 + offsets[0];
-	    offsets[0] += n->mh + inter_padding;
-	    break;
-	case 1:
-	    n->wx = (monw - n->mw) / 2;
-	    n->wy = (monh - n->mh) - offsets[1];
-	    offsets[1] += n->mh + inter_padding;
-	    break;
-	case 2:
-	    n->wx = (monw - n->mw) - border_padding;
-	    n->wy = (monh - n->mh) - offsets[2];
-	    offsets[2] += n->mh + inter_padding;
-	    break;
-	case 3:
-	    n->wx = (monw - n->mw) - offsets[3];
-	    n->wy = (monh - n->mh) / 2;
-	    offsets[3] += n->mw + inter_padding;
-	    break;
-	case 4:
-	    n->wx = (monw - n->mw) - border_padding;
-	    n->wy = offsets[4];
-	    offsets[4] += n->mh + inter_padding;
-	    break;
-	case 5:
-	    n->wx = (monw - n->mw) / 2;
-	    n->wy = offsets[5];
-	    offsets[5] += n->mh + inter_padding;
-	    break;
-	case 6:
-	    n->wx = border_padding;
-	    n->wy = offsets[6];
-	    offsets[6] += n->mh + inter_padding;
-	    break;
-	case 7:
-	    n->wx = offsets[7];
-	    n->wy = (monh - n->mh) / 2;
-	    offsets[7] += n->mw + inter_padding;
-	    break;
-	case 8:
-	    n->wx = border_padding;
-	    n->wy = (monh - n->mh) - offsets[8];
-	    offsets[8] += n->mh + inter_padding;
-	    break;
-	default:
-	    die("Invalid location");
+	if (n->prof.precise_location) {
+	    n->wx = n->prof.px;
+	    n->wy = n->prof.py;
+	}
+	else {
+	    switch (n->prof.location) {
+	    case 0:
+		n->wx = (monw - n->mw) / 2;
+		n->wy = (monh - n->mh) / 2 + offsets[0];
+		offsets[0] += n->mh + inter_padding;
+		break;
+	    case 1:
+		n->wx = (monw - n->mw) / 2;
+		n->wy = (monh - n->mh) - offsets[1];
+		offsets[1] += n->mh + inter_padding;
+		break;
+	    case 2:
+		n->wx = (monw - n->mw) - border_padding;
+		n->wy = (monh - n->mh) - offsets[2];
+		offsets[2] += n->mh + inter_padding;
+		break;
+	    case 3:
+		n->wx = (monw - n->mw) - offsets[3];
+		n->wy = (monh - n->mh) / 2;
+		offsets[3] += n->mw + inter_padding;
+		break;
+	    case 4:
+		n->wx = (monw - n->mw) - border_padding;
+		n->wy = offsets[4];
+		offsets[4] += n->mh + inter_padding;
+		break;
+	    case 5:
+		n->wx = (monw - n->mw) / 2;
+		n->wy = offsets[5];
+		offsets[5] += n->mh + inter_padding;
+		break;
+	    case 6:
+		n->wx = border_padding;
+		n->wy = offsets[6];
+		offsets[6] += n->mh + inter_padding;
+		break;
+	    case 7:
+		n->wx = offsets[7];
+		n->wy = (monh - n->mh) / 2;
+		offsets[7] += n->mw + inter_padding;
+		break;
+	    case 8:
+		n->wx = border_padding;
+		n->wy = (monh - n->mh) - offsets[8];
+		offsets[8] += n->mh + inter_padding;
+		break;
+	    default:
+		die("Invalid location");
+	    }
 	}
 
 #ifdef XINERAMA
@@ -650,6 +660,10 @@ read_dnote_message(void)
 		i++;
 		read_prof.inline_image = 0;
 		break;
+	    case DNOTE_OPTION_IMMUTABLE:
+		i++;
+		read_prof.immutable = 1;
+		break;
 	    case DNOTE_OPTION_PROGRESS_BAR:
 		i++;
 		if ((p = strchr(msg + i, '/')))
@@ -657,6 +671,16 @@ read_dnote_message(void)
 		read_prof.progress_val = atoi(msg + i);
 		i += strlen(msg + i) + 1;
 		read_prof.progress_of = atoi(msg + i);
+		i += strlen(msg + i);
+		break;
+	    case DNOTE_OPTION_PRECISE_LOCATION:
+		i++;
+		read_prof.precise_location = 1;
+		if ((p = strchr(msg + i, '/')))
+		    *p = '\0';
+		read_prof.px = atoi(msg + i);
+		i += strlen(msg + i) + 1;
+		read_prof.py = atoi(msg + i);
 		i += strlen(msg + i);
 		break;
 	    case DNOTE_OPTION_SHELL_COMMAND:
@@ -909,8 +933,10 @@ set_defaults(void)
     read_prof.min_width = def_min_width;
     read_prof.center_text = def_center_text;
     read_prof.location = def_location;
+    read_prof.precise_location = 0;
     read_prof.inline_image = 0;
     read_prof.progress_of = 0;
+    read_prof.immutable = 0;
     image_path_request = NULL;
 }
 

@@ -13,7 +13,7 @@
 void
 usage(void) {
     fputs("usage: dnotec [OPTS]\n"
-	  "	-list			list active notifications\n"
+	  "	-list			list active notifications with an id\n"
 	  "	-kill [ID]		kill notification with id\n"
 	  "	-renew [ID]		renew notification with id\n"
 	  "	-select [ID]		select notification with id\n"
