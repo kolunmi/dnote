@@ -55,15 +55,16 @@ Window locations are specified numerically and by the following pattern on a mon
 
 #### dnotec
 
-| Option             | Description                          |
-|--------------------|--------------------------------------|
-| `-list`            | list active notifications with an id |
-| `-kill [ID]`       | kill notification with id            |
-| `-renew [ID]`      | renew notification with id           |
-| `-select [ID]`     | select notification with id          |
-| `-img-list`        | list pngs contained in memory        |
-| `-img-load [PATH]` | load or reload a png into memory     |
-| `-v`               | print version info                   |
+| Option             | Description                             |
+|--------------------|-----------------------------------------|
+| `-list`            | list active non-anonymous notifications |
+| `-kill [ID]`       | kill notification with id               |
+| `-clear`           | kill all active notifications           |
+| `-renew [ID]`      | renew notification with id              |
+| `-select [ID]`     | select notification with id             |
+| `-img-list`        | list pngs contained in memory           |
+| `-img-load [PATH]` | load or reload a png into memory        |
+| `-v`               | print version info                      |
 
 ## Examples
 ```bash
@@ -79,8 +80,7 @@ echo top right | dnote -loc 4 -exp 15
 # construct a progress bar with fraction values
 echo '75%' | dnote -pbar 3 4
 
-# associate the notification with an id, so any existing
-# matches and their settings will be overwritten
+# associate the notification with an id, so any existing matches and their settings will be overwritten
 for i in $(seq 0 10); do
 	echo $i out of 10 | dnote -id abc -pbar $i 10
 	sleep 0.1
@@ -92,13 +92,11 @@ echo copying files | dnote -id "$ID" -exp 0 -imut
 cp "$SRC" "$DEST"
 dnotec -kill "$ID"
 
-# have the server run a shell command
-# when the notification is selected
+# have the server run a shell command when the notification is selected
 ID=volume
 echo "Current Volume: $(pamixer --get-volume)" | dnote -id "$ID" -cmd 'pavucontrol'
 # left click, or:
 dnotec -select "$ID"
-# server will spawn new process
 
 # render a png to the notification
 PNG_PATH='./image.png'

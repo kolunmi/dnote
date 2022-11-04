@@ -754,6 +754,12 @@ read_dnotec_message(void)
 	    i++;
 	    list = 2;
 	    break;
+	case DNOTEC_OPTION_CLEAR:
+	    i++;
+	    for (j = 0; j < MAX_NOTIFICATIONS; j++)
+		if (notifs[j].active)
+		    notifs[j].visible = 0;
+	    break;
 	case DNOTEC_OPTION_KILL:
 	    i++;
 	    if ((n = find_notification(msg + i)) != NULL)

@@ -32,7 +32,8 @@
 
 #define DNOTEC_OPTION_LIST          '0'
 #define DNOTEC_OPTION_KILL          '1'
-#define DNOTEC_OPTION_RENEW         '2'
-#define DNOTEC_OPTION_SELECT        '3'
-#define DNOTEC_OPTION_IMAGE_LOAD    '4'
-#define DNOTEC_OPTION_IMAGE_LIST    '5'
+#define DNOTEC_OPTION_CLEAR         '2'
+#define DNOTEC_OPTION_RENEW         '3'
+#define DNOTEC_OPTION_SELECT        '4'
+#define DNOTEC_OPTION_IMAGE_LOAD    '5'
+#define DNOTEC_OPTION_IMAGE_LIST    '6'

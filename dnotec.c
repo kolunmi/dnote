@@ -13,8 +13,9 @@
 void
 usage(void) {
     fputs("usage: dnotec [OPTS]\n"
-	  "	-list			list active notifications with an id\n"
+	  "	-list			list active non-anonymous notifications\n"
 	  "	-kill [ID]		kill notification with id\n"
+	  "	-clear			kill all active notifications\n"
 	  "	-renew [ID]		renew notification with id\n"
 	  "	-select [ID]		select notification with id\n"
 	  "	-img-list		list pngs contained in memory\n"
@@ -45,6 +46,9 @@ main(int argc, char *argv[]) {
 	}
 	else if (!strcmp(argv[i], "-list")) {
 	    snprintf(buf, sizeof buf, "%c", DNOTEC_OPTION_LIST);
+	}
+	else if (!strcmp(argv[i], "-clear")) {
+	    snprintf(buf, sizeof buf, "%c", DNOTEC_OPTION_CLEAR);
 	}
 	else if (!strcmp(argv[i], "-img-list")) {
 	    snprintf(buf, sizeof buf, "%c", DNOTEC_OPTION_IMAGE_LIST);
