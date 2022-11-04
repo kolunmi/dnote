@@ -1,4 +1,3 @@
-#include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <locale.h>
@@ -72,6 +71,8 @@ typedef struct {
 } Notification;
 
 
+PngImage *add_image(char *path, int force_reload);
+Notification *find_notification(char *id);
 void *count_down(void *arg);
 void *monitor_socket(void *arg);
 void *monitor_x(void *arg);
@@ -80,9 +81,10 @@ void cancel_inactive(void);
 void cleanup(void);
 void configure_x_geom(void);
 void create_window(Window *win);
-void draw_contents(Notification *n);
-void make_geometry(Notification *n);
-void read_message(void);
+void draw_contents(Notification *n, PngImage *img);
+void make_geometry(Notification *n, PngImage *img);
+void read_dnote_message(void);
+void read_dnotec_message(void);
 void recieve_message(void);
 void run(void);
 void set_defaults(void);
@@ -123,7 +125,65 @@ static unsigned int max_lines;
 static char *image_path_request;
 static PngFile image_files[MAX_IMAGE_MEM];
 static PngFile *image_file_ring[MAX_IMAGE_MEM];
-static PngImage *cur_image;
+
+
+PngImage *
+add_image(char *path, int force_reload) {
+    unsigned int i, j;
+    PngImage *img;
+    PngFile *pf;
+
+    img = NULL;
+    
+    for (i = 0; i < MAX_IMAGE_MEM; i++) {
+	if (image_file_ring[i]->path[0] == '\0')
+	    break;
+	if (!strcmp(image_file_ring[i]->path, path)) {
+	    img = &image_file_ring[i]->img;
+	    break;
+	}
+    }
+
+    if (img == NULL)
+	i = MAX_IMAGE_MEM - 1;
+    
+    if (img == NULL || force_reload) {
+	if ((img = read_png_to_image(&image_file_ring[i]->img, path)) != NULL) {
+	    strncpy(image_file_ring[i]->path, path, sizeof image_file_ring[i]->path);
+	    report(0, TITLE_STATUS, "loaded image '%s' into memory", path);
+	}
+	else {
+	    report(1, TITLE_WARNING, "could not read image file '%s'", path);
+	    return NULL;
+	}
+    }
+
+    for (j = 0; j < i; j++) {
+	pf = image_file_ring[j];
+	image_file_ring[j] = image_file_ring[i];
+	image_file_ring[i] = pf;
+    }
+
+    return img;
+}
+
+
+Notification *
+find_notification(char *id) {
+    unsigned int i;
+
+    for (i = 0; i < MAX_NOTIFICATIONS; i++) {
+	if (!notifs[i].active)
+	    continue;
+	if (notifs[i].prof.id[0] == '\0')
+	    continue;
+	if (!strcmp(id, notifs[i].prof.id))
+	    return &notifs[i];
+    }
+    
+    return NULL;
+}
+
 
 void *
 count_down(void *arg)
@@ -430,7 +490,7 @@ create_window (Window *win)
 
 
 void
-draw_contents(Notification *n)
+draw_contents(Notification *n, PngImage *img)
 {
     unsigned int i;
     int x, y, ry;
@@ -439,20 +499,20 @@ draw_contents(Notification *n)
     drw_rect(n->drw, 0, 0, n->mw, n->mh, 1, 1);
     y = contents_padding_vertical;
 
-    if (cur_image != NULL) {
+    if (img != NULL) {
 	if (n->prof.inline_image) {
-	    drw_png(n->drw, cur_image, 0, y);
+	    drw_png(n->drw, img, 0, y);
 
-	    if (linecnt * bh < cur_image->h)
-		ry = cur_image->h / 2 - linecnt * bh / 2;
+	    if (linecnt * bh < img->h)
+		ry = img->h / 2 - linecnt * bh / 2;
 	    else
 		ry = 0;
 	    
 	    for (i = 0; i < linecnt; i++) {
-		if (ry < cur_image->h) {
-		    x = cur_image->w;
+		if (ry < img->h) {
+		    x = img->w;
 		    if (n->prof.center_text)
-			x += (n->mw - cur_image->w - TEXTW(n->drw, lines[i]))/2;
+			x += (n->mw - img->w - TEXTW(n->drw, lines[i]))/2;
 		}
 		else
 		    x = n->prof.center_text ? (n->mw - TEXTW(n->drw, lines[i]))/2 : 0;
@@ -461,18 +521,18 @@ draw_contents(Notification *n)
 		ry += bh;
 	    }
 	    
-	    if (ry < cur_image->h)
-		ry = cur_image->h;
+	    if (ry < img->h)
+		ry = img->h;
 
 	    y += ry;
 	}
 	else {
-	    drw_png(n->drw, cur_image, (n->mw - cur_image->w)/2, y);
-	    y += cur_image->h;
+	    drw_png(n->drw, img, (n->mw - img->w)/2, y);
+	    y += img->h;
 	}
     }
     
-    if (cur_image == NULL || !n->prof.inline_image)
+    if (img == NULL || !n->prof.inline_image)
 	for (i = 0; i < linecnt; i++) {
 	    drw_text(n->drw, n->prof.center_text ? (n->mw - TEXTW(n->drw, lines[i]))/2 : 0,
 		     y, n->mw, bh, lrpad / 2, lines[i], 0);
@@ -506,7 +566,7 @@ draw_contents(Notification *n)
 
 
 void
-make_geometry(Notification *n)
+make_geometry(Notification *n, PngImage *img)
 {
     unsigned int i, inputw, tmpmax;
     int y;
@@ -517,7 +577,7 @@ make_geometry(Notification *n)
 
     inputw = tmpmax = 0;
     
-    if (cur_image == NULL || !n->prof.inline_image) {
+    if (img == NULL || !n->prof.inline_image) {
 	for (i = 0; i < linecnt; i++) {
 	    tmpmax = TEXTW(n->drw, lines[i]);
 	    if (tmpmax > inputw)
@@ -529,30 +589,30 @@ make_geometry(Notification *n)
     else {
 	for (y = 0, i = 0; i < linecnt; i++) {
 	    tmpmax = TEXTW(n->drw, lines[i]);
-	    if (y < cur_image->h)
-		tmpmax += cur_image->w;
+	    if (y < img->h)
+		tmpmax += img->w;
 	    y += bh;
 
 	    if (tmpmax > inputw)
 		inputw = tmpmax;
 	}
 
-	if (y < cur_image->h)
-	    y = cur_image->h;
+	if (y < img->h)
+	    y = img->h;
 	n->mh += y;
     }
 
-    if (cur_image == NULL || n->prof.inline_image)
+    if (img == NULL || n->prof.inline_image)
 	n->mw = MIN(MAX(inputw, n->prof.min_width), 9 * monw / 10);
     else {
-	n->mw = MIN(MAX(MAX(inputw, cur_image->w), n->prof.min_width), 9 * monw / 10);
-	n->mh += cur_image->h;
+	n->mw = MIN(MAX(MAX(inputw, img->w), n->prof.min_width), 9 * monw / 10);
+	n->mh += img->h;
     }
 }
 
 
 void
-read_message(void)
+read_dnote_message(void)
 {
     size_t i, j;
     int optblk;
@@ -561,34 +621,36 @@ read_message(void)
     optblk = 1;
     linecnt = 0;
 
-    for (i = 0, j = 0; i < msg_len; i++) {
+    set_defaults();
+    
+    for (i = 1, j = 1; i < msg_len; i++) {
 	if (optblk) {
 	    switch (msg[i]) {
 	    case '\n':
 		optblk = 0;
 		j = i + 1;
 		break;
-	    case OPTION_JUSTIFY_CENTER:
+	    case DNOTE_OPTION_JUSTIFY_CENTER:
 		i++;
 		read_prof.center_text = 1;
 		break;
-	    case OPTION_JUSTIFY_LEFT:
+	    case DNOTE_OPTION_JUSTIFY_LEFT:
 		i++;
 		read_prof.center_text = 0;
 		break;
-	    case OPTION_NO_EXPIRE:
+	    case DNOTE_OPTION_NO_EXPIRE:
 		i++;
 		read_prof.expire = 0;
 		break;
-	    case OPTION_INLINE_IMAGE:
+	    case DNOTE_OPTION_INLINE_IMAGE:
 		i++;
 		read_prof.inline_image = 1;
 		break;
-	    case OPTION_HEADER_IMAGE:
+	    case DNOTE_OPTION_HEADER_IMAGE:
 		i++;
 		read_prof.inline_image = 0;
 		break;
-	    case OPTION_PROGRESS_BAR:
+	    case DNOTE_OPTION_PROGRESS_BAR:
 		i++;
 		if ((p = strchr(msg + i, '/')))
 		    *p = '\0';
@@ -597,32 +659,32 @@ read_message(void)
 		read_prof.progress_of = atoi(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case OPTION_SHELL_COMMAND:
+	    case DNOTE_OPTION_SHELL_COMMAND:
 		i++;
 		strncpy(read_prof.cmd, msg + i, sizeof read_prof.cmd);
 		i += strlen(msg + i);
 		break;
-	    case OPTION_EXPIRE:
+	    case DNOTE_OPTION_EXPIRE:
 		i++;
 		read_prof.expire = atof(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case OPTION_MIN_WIDTH:
+	    case DNOTE_OPTION_MIN_WIDTH:
 		i++;
 		read_prof.min_width = atoi(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case OPTION_LOCATION:
+	    case DNOTE_OPTION_LOCATION:
 		i++;
 		read_prof.location = atoi(msg + i);
 		i += strlen(msg + i);
 		break;
-	    case OPTION_ID:
+	    case DNOTE_OPTION_ID:
 		i++;
 		strncpy(read_prof.id, msg + i, sizeof read_prof.id);
 		i += strlen(msg + i);
 		break;
-	    case OPTION_IMAGE_PATH:
+	    case DNOTE_OPTION_IMAGE_PATH:
 		i++;
 		image_path_request = msg + i;
 		i += strlen(msg + i);
@@ -649,11 +711,79 @@ read_message(void)
 
 
 void
+read_dnotec_message(void)
+{
+    size_t i;
+    int j, list;
+    Notification *n;
+    FILE *rsp;
+    
+    list = 0;
+
+    for (i = 1; i < msg_len; i++) {
+	switch (msg[i]) {
+	case DNOTEC_OPTION_LIST:
+	    i++;
+	    list = 1;
+	    break;
+	case DNOTEC_OPTION_IMAGE_LIST:
+	    i++;
+	    list = 2;
+	    break;
+	case DNOTEC_OPTION_KILL:
+	    i++;
+	    if ((n = find_notification(msg + i)) != NULL)
+		n->visible = 0;
+	    i += strlen(msg + i);
+	    break;
+	case DNOTEC_OPTION_RENEW:
+	    i++;
+	    if ((n = find_notification(msg + i)) != NULL)
+		n->elapsed = 0.0;
+	    i += strlen(msg + i);
+	    break;
+	case DNOTEC_OPTION_SELECT:
+	    i++;
+	    if ((n = find_notification(msg + i)) != NULL) {
+		n->visible = 0;
+		n->selected = 1;
+	    }
+	    i += strlen(msg + i);
+	    break;
+	case DNOTEC_OPTION_IMAGE_LOAD:
+	    i++;
+	    add_image(msg + i, 1);
+	    i += strlen(msg + i);
+	    break;
+	}
+    }
+
+    if (list) {
+	if ((rsp = fdopen(cli_fd, "w")) != NULL) {
+	    if (list == 1) {
+		for (j = 0; j < MAX_NOTIFICATIONS; j++)
+		    if (order[j]->active && order[j]->prof.id[0] != '\0')
+			fprintf(rsp, "%s\n", order[j]->prof.id);
+	    }
+	    else {
+		for (j = 0; j < MAX_IMAGE_MEM; j++)
+		    if (image_file_ring[j]->path[0] != '\0')
+			fprintf(rsp, "%s\n", image_file_ring[j]->path);
+	    }
+	    fclose(rsp);
+	}
+	else
+	    report(1, TITLE_WARNING, "could not relay information to client");
+    }
+}
+
+
+
+void
 recieve_message(void)
 {
     unsigned int i, j;
     Notification *n;
-    PngFile *pf;
     PngImage *img;
 	    
     if (cli_fd == -1) {
@@ -662,16 +792,21 @@ recieve_message(void)
     }
 
     msg_len = recv(cli_fd, msg, sizeof msg, 0);
-    close(cli_fd);
 
     for (;;) {
 	if (msg_len > 0) {
-	    set_defaults();
-	    read_message();
-	    if (!linecnt)
+	    if (msg[0] == DNOTE_PREFIX) {
+		read_dnote_message();
+		if (!linecnt)
+		    break;
+	    }
+	    else if (msg[0] == DNOTEC_PREFIX) {
+		read_dnotec_message();
 		break;
+	    }
 	} else
 	    break;
+	
 	
 	n = NULL;
 	if (read_prof.id[0] != '\0')
@@ -708,45 +843,20 @@ recieve_message(void)
 	else if (n->active)
 	    n->draw = 1;
 
+	img = NULL;
+	if (image_path_request != NULL)
+	    img = add_image(image_path_request, 0);
 
-	cur_image = NULL;
-	if (image_path_request != NULL) {
-
-	    for (i = 0; i < MAX_IMAGE_MEM; i++) {
-		if (image_file_ring[i]->path[0] == '\0')
-		    break;
-		if (!strcmp(image_file_ring[i]->path, image_path_request)) {
-		    cur_image = &image_file_ring[i]->img;
-		    break;
-		}
-	    }
-	    
-	    if (cur_image == NULL) {
-		i = MAX_IMAGE_MEM - 1;
-		if ((cur_image = read_png_to_image(&image_file_ring[i]->img, image_path_request)) != NULL) {
-		    strncpy(image_file_ring[i]->path, image_path_request, sizeof image_file_ring[i]->path);
-		    report(0, TITLE_STATUS, "loaded new image '%s' into memory", image_path_request);
-		}
-		else
-		    report(1, TITLE_WARNING, "could not read image file '%s'", image_path_request);
-	    }
-
-            if (cur_image != NULL)
-		for (j = 0; j < i; j++) {
-		    pf = image_file_ring[j];
-		    image_file_ring[j] = image_file_ring[i];
-		    image_file_ring[i] = pf;
-		}
-	}
-	    
 	n->prof = read_prof;
-	make_geometry(n);
-	draw_contents(n);
+	make_geometry(n, img);
+	draw_contents(n, img);
 
 	n->active = n->visible = 1;
 
 	break;
     }
+
+    close(cli_fd);
 }
 
 

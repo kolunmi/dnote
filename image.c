@@ -1,9 +1,7 @@
-#include <png.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "image.h"
-#include "util.h"
 
 void
 pngimage_free(PngImage *img) {
