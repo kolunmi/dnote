@@ -29,11 +29,14 @@ read_png_to_image(PngImage *img, char *path)
     if ((fp = fopen(path, "rb")) == NULL)
 	return NULL;
 
-    if ((png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL)) == NULL)
+    if ((png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL)) == NULL) {
+	fclose(fp);
 	return NULL;
+    }
 
     if ((info = png_create_info_struct(png)) == NULL) {
 	png_destroy_read_struct(&png, &info, NULL);
+	fclose(fp);
 	return NULL;
     }
 
